@@ -64,7 +64,7 @@ def _infer_problem_type(profile: DatasetProfile, target_column: str | None) -> P
     return ProblemType.UNKNOWN
 
 
-def infer_strategy(profile: DatasetProfile) -> StrategySpec:
+def infer_strategy(profile: DatasetProfile, *, target_column_override: str | None = None) -> StrategySpec:
     """Infer an ML strategy from a DatasetProfile.
 
     This is an LLM-ready stub:
@@ -77,7 +77,16 @@ def infer_strategy(profile: DatasetProfile) -> StrategySpec:
     prompt_payload = profile_to_prompt_dict(profile)
 
     top_candidate = profile.target_candidates[0] if profile.target_candidates else None
-    target_column = top_candidate.column if (top_candidate and top_candidate.score >= 1.0) else None
+
+    if target_column_override and target_column_override in profile.columns:
+        target_column = target_column_override
+        override_reason = "target override provided and exists in dataset"
+    elif target_column_override and target_column_override not in profile.columns:
+        target_column = None
+        override_reason = "target override provided but not found in dataset"
+    else:
+        target_column = top_candidate.column if (top_candidate and top_candidate.score >= 1.0) else None
+        override_reason = "no target override provided"
 
     problem_type = _infer_problem_type(profile, target_column)
 
@@ -92,6 +101,8 @@ def infer_strategy(profile: DatasetProfile) -> StrategySpec:
         "prompt_payload": prompt_payload,
         "decision": {
             "selected_target_column": target_column,
+            "target_override": target_column_override,
+            "target_override_reason": override_reason,
             "problem_type": problem_type.value,
             "why_target": (top_candidate.reasons if top_candidate else []),
         },

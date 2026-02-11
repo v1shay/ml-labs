@@ -23,7 +23,7 @@ class ForgeOrchestrator:
         self._config = config or AppConfig()
         self._logger = logger or logging.getLogger(self.__class__.__name__)
 
-    def run_project(self, dataset_path: str) -> ProjectState:
+    def run_project(self, dataset_path: str, *, target_column: str | None = None) -> ProjectState:
         project_id = str(uuid.uuid4())
         state = new_project_state(
             project_id=project_id,
@@ -37,7 +37,7 @@ class ForgeOrchestrator:
             profile = profile_dataset(dataset.dataframe)
             state = replace(state, profile=profile, status=ProjectStatus.PROFILED)
 
-            strategy = infer_strategy(profile)
+            strategy = infer_strategy(profile, target_column_override=target_column)
             state = replace(
                 state,
                 strategy=strategy,
