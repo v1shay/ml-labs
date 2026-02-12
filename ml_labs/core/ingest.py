@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import pandas as pd
 
@@ -31,8 +32,10 @@ def ingest_csv(dataset_path: str, *, config: AppConfig | None = None) -> Dataset
 
     if not path.exists():
         raise IngestionError(f"Dataset not found: {path}")
+
     if not path.is_file():
         raise IngestionError(f"Dataset path is not a file: {path}")
+
     if path.suffix.lower() != ".csv":
         raise IngestionError(f"Unsupported dataset type (expected .csv): {path}")
 
@@ -50,3 +53,25 @@ def ingest_csv(dataset_path: str, *, config: AppConfig | None = None) -> Dataset
         loaded_at=utcnow(),
         dataframe=df,
     )
+
+
+# ------------------------------------------------------------------
+# PRODUCTION WRAPPER
+# ------------------------------------------------------------------
+
+def load_dataset(dataset_path: str, *, config: AppConfig | None = None) -> Dataset:
+    """
+    Public ingestion entrypoint used by orchestrator.
+
+    This wrapper exists to:
+    - Keep ingest_csv as the CSV-specific loader
+    - Provide a future extension point for other formats (Parquet, JSON, images)
+    - Maintain backward compatibility with orchestrator imports
+    """
+
+    path = Path(dataset_path)
+
+    if path.suffix.lower() == ".csv":
+        return ingest_csv(dataset_path, config=config)
+
+    raise IngestionError(f"Unsupported dataset type: {path.suffix}")

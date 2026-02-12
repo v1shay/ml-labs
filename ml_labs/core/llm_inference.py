@@ -187,3 +187,4 @@ def infer_strategy(
         next_actions=next_actions,
         requires_user_input=requires_user_input,
     )
+
