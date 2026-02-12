@@ -20,7 +20,7 @@ class ForgeOrchestrator:
     """
     Deterministic lifecycle controller for Forge.
 
-    This is a phase-driven state machine.
+    Phase-driven execution state machine.
     """
 
     def __init__(self, config: AppConfig | None = None):
@@ -29,7 +29,7 @@ class ForgeOrchestrator:
     def run_project(
         self,
         dataset_path: str,
-        target_override: Optional[str] = None,
+        target_column: Optional[str] = None,
     ) -> ProjectState:
 
         state = ProjectState(
@@ -56,7 +56,7 @@ class ForgeOrchestrator:
             # -----------------------------
             strategy = infer_strategy(
                 profile,
-                target_column_override=target_override,
+                target_column_override=target_column,
             )
             state.strategy = strategy
             state.phase = ExecutionPhase.STRATEGY_INFERRED
@@ -77,17 +77,12 @@ class ForgeOrchestrator:
     # -------------------------------------
 
     def _determine_next_phase(self, state: ProjectState) -> None:
-        """
-        Converts strategy output into execution phase.
-        LLM does NOT control lifecycle.
-        """
 
         if state.strategy is None:
             state.phase = ExecutionPhase.FAILED
             state.errors.append("Strategy inference failed.")
             return
 
-        # Case 1: Needs user input
         if state.strategy.requires_user_input:
             state.phase = ExecutionPhase.AWAITING_USER_INPUT
             state.next_actions = state.strategy.next_actions
@@ -96,7 +91,6 @@ class ForgeOrchestrator:
 
         problem_type = state.strategy.problem_type
 
-        # Case 2: Supervised ML
         if problem_type in (
             ProblemType.CLASSIFICATION,
             ProblemType.REGRESSION,
@@ -106,13 +100,11 @@ class ForgeOrchestrator:
             state.requires_user_input = False
             return
 
-        # Case 3: Unsupervised ML
         if problem_type == ProblemType.UNSUPERVISED:
             state.phase = ExecutionPhase.READY_FOR_EXECUTION
             state.next_actions = ["run_unsupervised_analysis"]
             state.requires_user_input = False
             return
 
-        # Case 4: Unknown
         state.phase = ExecutionPhase.FAILED
         state.errors.append("Unknown problem type.")
