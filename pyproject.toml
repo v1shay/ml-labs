@@ -1,0 +1,14 @@
+[project]
+name = "ml_labs"
+version = "0.1.0"
+description = "ML Labs Engine"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["ml_labs*"]
+exclude = ["app*"]
