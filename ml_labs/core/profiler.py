@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import Any
 
 import pandas as pd
 
-from ml_labs.core.types import ColumnProfile, DatasetProfile, SemanticType, TargetCandidate
+from ml_labs.core.types import (
+    ColumnProfile,
+    DatasetProfile,
+    SemanticType,
+    TargetCandidate,
+    Dataset,
+)
 
+
+# -------------------------------------------------
+# Semantic Type Inference
+# -------------------------------------------------
 
 def _infer_semantic_type(series: pd.Series) -> SemanticType:
     if pd.api.types.is_bool_dtype(series):
@@ -15,7 +26,6 @@ def _infer_semantic_type(series: pd.Series) -> SemanticType:
     if pd.api.types.is_numeric_dtype(series):
         return "numeric"
     if pd.api.types.is_string_dtype(series) or pd.api.types.is_object_dtype(series):
-        # Heuristic: long average string length suggests free-form text.
         non_null = series.dropna()
         if len(non_null) == 0:
             return "unknown"
@@ -29,12 +39,15 @@ def _example_values(series: pd.Series, max_examples: int = 5) -> list[str]:
     non_null = series.dropna()
     if len(non_null) == 0:
         return []
-    # Preserve determinism by sorting by frequency then value.
     values = non_null.astype(str)
     counts = Counter(values)
     ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     return [v for v, _ in ordered[:max_examples]]
 
+
+# -------------------------------------------------
+# Target Heuristics
+# -------------------------------------------------
 
 def _target_name_hint(col: str) -> float:
     c = col.strip().lower()
@@ -64,8 +77,8 @@ def _candidate_score(
     row_count: int,
     is_last_column: bool,
 ) -> TargetCandidate:
-    reasons: list[str] = []
 
+    reasons: list[str] = []
     score = 0.0
 
     name_score = _target_name_hint(col)
@@ -75,7 +88,7 @@ def _candidate_score(
 
     if is_last_column:
         score += 0.35
-        reasons.append("last column is a common convention for targets")
+        reasons.append("last column convention")
 
     if missing_pct <= 5.0:
         score += 0.6
@@ -89,33 +102,48 @@ def _candidate_score(
 
     unique_ratio = unique_count / max(row_count, 1) if row_count > 0 else 0.0
 
-    # Targets are rarely IDs; penalize near-unique columns.
     if unique_ratio >= 0.98 and row_count > 0:
         score -= 1.2
         reasons.append("near-unique values suggest identifier")
 
-    # Reward plausible target semantic types.
     if semantic_type in ("numeric", "categorical", "boolean"):
         score += 0.7
         reasons.append("plausible target semantic type")
     elif semantic_type == "text":
         score += 0.2
-        reasons.append("text targets are possible but less common")
+        reasons.append("text targets possible")
     else:
         score -= 0.2
         reasons.append("unclear semantic type")
 
-    # Penalize extremely high cardinality categoricals.
     if semantic_type in ("categorical", "text") and row_count > 0:
         if unique_ratio >= 0.5:
             score -= 0.6
-            reasons.append("very high cardinality for categorical/text")
+            reasons.append("very high cardinality")
 
-    return TargetCandidate(column=col, score=round(score, 4), reasons=reasons)
+    return TargetCandidate(
+        column=col,
+        score=round(score, 4),
+        reasons=reasons,
+    )
 
 
-def profile_dataset(df: pd.DataFrame) -> DatasetProfile:
-    """Compute a structured profile for an in-memory DataFrame."""
+# -------------------------------------------------
+# MAIN PROFILE FUNCTION (V3 FIXED)
+# -------------------------------------------------
+
+def profile_dataset(dataset: Dataset) -> DatasetProfile:
+    """
+    Profile a Dataset object (v3 architecture).
+
+    Extracts dataframe safely.
+    Future-proof for modality expansion.
+    """
+
+    if not hasattr(dataset, "dataframe"):
+        raise ValueError("Dataset does not contain a dataframe attribute")
+
+    df: pd.DataFrame = dataset.dataframe
 
     row_count = int(df.shape[0])
     col_names = [str(c) for c in df.columns]
@@ -130,7 +158,11 @@ def profile_dataset(df: pd.DataFrame) -> DatasetProfile:
 
         non_null = s.dropna()
         unique_count = int(non_null.nunique(dropna=True))
-        unique_pct = float((unique_count / max(len(non_null), 1)) * 100.0) if len(non_null) else 0.0
+        unique_pct = (
+            float((unique_count / max(len(non_null), 1)) * 100.0)
+            if len(non_null)
+            else 0.0
+        )
 
         semantic_type = _infer_semantic_type(s)
 
@@ -144,11 +176,17 @@ def profile_dataset(df: pd.DataFrame) -> DatasetProfile:
             example_values=_example_values(s),
         )
 
+    # -------------------------------------------------
+    # Target Candidates
+    # -------------------------------------------------
+
     candidates: list[TargetCandidate] = []
+
     for i, col in enumerate(col_names):
         cp = columns[col]
         non_null = df[col].dropna()
         unique_count = int(non_null.nunique(dropna=True))
+
         candidates.append(
             _candidate_score(
                 col=col,
@@ -163,21 +201,29 @@ def profile_dataset(df: pd.DataFrame) -> DatasetProfile:
 
     candidates_sorted = sorted(candidates, key=lambda c: (-c.score, c.column))
 
+    # -------------------------------------------------
+    # Class Balance
+    # -------------------------------------------------
+
     class_balance: dict[str, dict[str, float]] = {}
-    # Compute class balance for top candidate if it looks like classification.
+
     if candidates_sorted:
         top = candidates_sorted[0]
         s = df[top.column]
         non_null = s.dropna()
-        cp = columns[top.column]
 
-        # Only compute if cardinality suggests class labels.
         unique = int(non_null.nunique(dropna=True))
+
         if row_count > 0 and unique > 0 and unique <= min(20, max(2, int(row_count * 0.05) or 2)):
             counts = non_null.astype(str).value_counts(dropna=True)
-            dist = {k: float(v / max(len(non_null), 1)) for k, v in counts.items()}
-            # Sort keys for deterministic output.
-            class_balance[top.column] = {k: round(dist[k], 6) for k in sorted(dist.keys())}
+            dist = {
+                k: float(v / max(len(non_null), 1))
+                for k, v in counts.items()
+            }
+            class_balance[top.column] = {
+                k: round(dist[k], 6)
+                for k in sorted(dist.keys())
+            }
 
     return DatasetProfile(
         row_count=row_count,
@@ -189,8 +235,11 @@ def profile_dataset(df: pd.DataFrame) -> DatasetProfile:
     )
 
 
-def profile_to_prompt_dict(profile: DatasetProfile) -> dict[str, object]:
-    """A stable, LLM-friendly representation of the dataset profile."""
+# -------------------------------------------------
+# LLM Prompt Representation
+# -------------------------------------------------
+
+def profile_to_prompt_dict(profile: DatasetProfile) -> dict[str, Any]:
 
     cols = []
     for name in sorted(profile.columns.keys()):
@@ -208,7 +257,11 @@ def profile_to_prompt_dict(profile: DatasetProfile) -> dict[str, object]:
         )
 
     candidates = [
-        {"column": c.column, "score": c.score, "reasons": list(c.reasons)}
+        {
+            "column": c.column,
+            "score": c.score,
+            "reasons": list(c.reasons),
+        }
         for c in profile.target_candidates[:10]
     ]
 
