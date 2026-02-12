@@ -6,6 +6,9 @@ from ml_labs.core.profiler import profile_to_prompt_dict
 from ml_labs.core.types import DatasetProfile, ProblemType, StrategySpec
 
 
+MIN_TARGET_SCORE = 0.8  # safer threshold than hard-coded 1.0
+
+
 def _choose_metric(problem_type: ProblemType) -> str:
     if problem_type == ProblemType.CLASSIFICATION:
         return "f1"
@@ -46,49 +49,103 @@ def _infer_problem_type(profile: DatasetProfile, target_column: str | None) -> P
     if cp is None:
         return ProblemType.UNKNOWN
 
-    # Deterministic heuristic based on semantic type and cardinality.
     if cp.semantic_type in ("categorical", "boolean"):
         return ProblemType.CLASSIFICATION
 
     if cp.semantic_type == "numeric":
-        # Low-cardinality numeric targets often represent classes.
         unique = cp.unique_count
         if unique <= min(20, max(2, int(profile.row_count * 0.05) or 2)):
             return ProblemType.CLASSIFICATION
         return ProblemType.REGRESSION
 
-    # Text targets can be classification (sentiment) or generation; keep conservative.
     if cp.semantic_type == "text":
         return ProblemType.CLASSIFICATION
 
     return ProblemType.UNKNOWN
 
 
-def infer_strategy(profile: DatasetProfile, *, target_column_override: str | None = None) -> StrategySpec:
-    """Infer an ML strategy from a DatasetProfile.
+def infer_strategy(
+    profile: DatasetProfile,
+    *,
+    target_column_override: str | None = None,
+) -> StrategySpec:
+    """
+    Infer an ML strategy from a DatasetProfile.
 
-    This is an LLM-ready stub:
-    - It builds a structured, prompt-like payload from the profile.
-    - It simulates an LLM response deterministically using heuristics.
-
-    Replace the section marked "REAL LLM CALL" with your model invocation.
+    Deterministic LLM-ready stub with lifecycle-aware action planning.
     """
 
     prompt_payload = profile_to_prompt_dict(profile)
 
     top_candidate = profile.target_candidates[0] if profile.target_candidates else None
 
+    # -----------------------------------------
+    # Target Selection Logic
+    # -----------------------------------------
+
     if target_column_override and target_column_override in profile.columns:
         target_column = target_column_override
         override_reason = "target override provided and exists in dataset"
+
     elif target_column_override and target_column_override not in profile.columns:
-        target_column = None
-        override_reason = "target override provided but not found in dataset"
+        return StrategySpec(
+            problem_type=ProblemType.UNKNOWN,
+            target_column=None,
+            metric=None,
+            recommended_models=[],
+            preprocessing=[],
+            reasoning={
+                "error": "Provided target override not found in dataset.",
+                "prompt_payload": prompt_payload,
+            },
+            next_actions=["request_valid_target"],
+            requires_user_input=True,
+        )
+
     else:
-        target_column = top_candidate.column if (top_candidate and top_candidate.score >= 1.0) else None
+        target_column = (
+            top_candidate.column
+            if (top_candidate and top_candidate.score >= MIN_TARGET_SCORE)
+            else None
+        )
         override_reason = "no target override provided"
 
+    # -----------------------------------------
+    # Problem Type Inference
+    # -----------------------------------------
+
     problem_type = _infer_problem_type(profile, target_column)
+
+    # -----------------------------------------
+    # Lifecycle Action Planning
+    # -----------------------------------------
+
+    if problem_type in (ProblemType.CLASSIFICATION, ProblemType.REGRESSION):
+        next_actions = ["train_supervised_model"]
+        requires_user_input = False
+
+    elif problem_type == ProblemType.UNSUPERVISED:
+        next_actions = ["run_unsupervised_analysis"]
+        requires_user_input = False
+
+    else:
+        return StrategySpec(
+            problem_type=ProblemType.UNKNOWN,
+            target_column=None,
+            metric=None,
+            recommended_models=[],
+            preprocessing=[],
+            reasoning={
+                "error": "Unable to infer valid problem type.",
+                "prompt_payload": prompt_payload,
+            },
+            next_actions=["manual_review_required"],
+            requires_user_input=True,
+        )
+
+    # -----------------------------------------
+    # Preprocessing Plan
+    # -----------------------------------------
 
     preprocessing: list[str] = [
         "train_test_split",
@@ -96,6 +153,10 @@ def infer_strategy(profile: DatasetProfile, *, target_column_override: str | Non
         "encode_categoricals",
         "scale_numeric_features_if_needed",
     ]
+
+    # -----------------------------------------
+    # Reasoning Object
+    # -----------------------------------------
 
     reasoning: dict[str, Any] = {
         "prompt_payload": prompt_payload,
@@ -112,7 +173,7 @@ def infer_strategy(profile: DatasetProfile, *, target_column_override: str | Non
         ],
     }
 
-    # REAL LLM CALL (placeholder boundary):
+    # REAL LLM CALL boundary:
     # response = llm_client.complete(messages=[...], response_schema=StrategySpec)
     # return response
 
@@ -123,4 +184,6 @@ def infer_strategy(profile: DatasetProfile, *, target_column_override: str | Non
         recommended_models=_recommended_models(problem_type),
         preprocessing=preprocessing,
         reasoning=reasoning,
+        next_actions=next_actions,
+        requires_user_input=requires_user_input,
     )
