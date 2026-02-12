@@ -136,3 +136,10 @@ class ProjectState:
     next_actions: List[str] = field(default_factory=list)
     requires_user_input: bool = False
     errors: List[str] = field(default_factory=list)
+
+    @dataclass
+    class ModelResult:
+        model_name: str
+        metric_name: str
+        metric_value: float
+        training_time_seconds: float
