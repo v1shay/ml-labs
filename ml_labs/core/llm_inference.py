@@ -1,12 +1,26 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from ml_labs.core.profiler import profile_to_prompt_dict
-from ml_labs.core.types import DatasetProfile, ProblemType, StrategySpec
+from ml_labs.core.types import DatasetModality, DatasetProfile, ProblemType, StrategySpec
+from ml_labs.core.llm_client import LLMClient
 
 
 MIN_TARGET_SCORE = 0.8  # safer threshold than hard-coded 1.0
+
+# Global LLM client instance (can be configured via environment variable in future)
+_llm_client: Optional[LLMClient] = None
+
+
+def _get_llm_client() -> Optional[LLMClient]:
+    """Get LLM client instance (lazy initialization)."""
+    global _llm_client
+    if _llm_client is None:
+        # In future, can read from environment variable
+        # api_key = os.getenv("LLM_API_KEY")
+        _llm_client = LLMClient(api_key=None)  # Stub mode
+    return _llm_client
 
 
 def _choose_metric(problem_type: ProblemType) -> str:
@@ -19,7 +33,8 @@ def _choose_metric(problem_type: ProblemType) -> str:
     return "n/a"
 
 
-def _recommended_models(problem_type: ProblemType) -> list[str]:
+def _recommended_models_tabular(problem_type: ProblemType) -> list[str]:
+    """Recommended models for tabular data."""
     if problem_type == ProblemType.CLASSIFICATION:
         return [
             "logistic_regression",
@@ -39,6 +54,23 @@ def _recommended_models(problem_type: ProblemType) -> list[str]:
             "pca_for_visualization",
         ]
     return ["manual_review"]
+
+
+def _recommended_models_image() -> list[str]:
+    """Recommended models for image data."""
+    return [
+        "resnet",
+        "efficientnet",
+        "vit",
+    ]
+
+
+def _recommended_models_audio() -> list[str]:
+    """Recommended models for audio data."""
+    return [
+        "cnn_spectrogram",
+        "wav2vec",
+    ]
 
 
 def _infer_problem_type(profile: DatasetProfile, target_column: str | None) -> ProblemType:
@@ -64,18 +96,44 @@ def _infer_problem_type(profile: DatasetProfile, target_column: str | None) -> P
     return ProblemType.UNKNOWN
 
 
-def infer_strategy(
+def _call_llm_strategy(prompt_payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """
+    Call LLM to infer strategy from prompt payload.
+
+    Returns:
+        Optional dictionary with strategy specification, or None if LLM unavailable.
+    """
+    llm_client = _get_llm_client()
+    if llm_client is None:
+        return None
+
+    try:
+        response = llm_client.infer_strategy(prompt_payload)
+        # Validate response schema here if needed
+        return response
+    except Exception:
+        # Fall back to deterministic logic on any error
+        return None
+
+
+def _infer_strategy_tabular(
     profile: DatasetProfile,
     *,
     target_column_override: str | None = None,
 ) -> StrategySpec:
     """
-    Infer an ML strategy from a DatasetProfile.
+    Infer strategy for tabular data.
 
-    Deterministic LLM-ready stub with lifecycle-aware action planning.
+    Uses existing deterministic logic with optional LLM enhancement.
     """
-
     prompt_payload = profile_to_prompt_dict(profile)
+
+    # Try LLM enhancement first (if available)
+    llm_response = _call_llm_strategy(prompt_payload)
+    if llm_response is not None:
+        # Validate and use LLM response
+        # For now, fall through to deterministic logic
+        pass
 
     top_candidate = profile.target_candidates[0] if profile.target_candidates else None
 
@@ -89,6 +147,7 @@ def infer_strategy(
 
     elif target_column_override and target_column_override not in profile.columns:
         return StrategySpec(
+            modality=DatasetModality.TABULAR,
             problem_type=ProblemType.UNKNOWN,
             target_column=None,
             metric=None,
@@ -121,7 +180,7 @@ def infer_strategy(
     # -----------------------------------------
 
     if problem_type in (ProblemType.CLASSIFICATION, ProblemType.REGRESSION):
-        next_actions = ["train_supervised_model"]
+        next_actions = ["train_tabular_model"]
         requires_user_input = False
 
     elif problem_type == ProblemType.UNSUPERVISED:
@@ -130,6 +189,7 @@ def infer_strategy(
 
     else:
         return StrategySpec(
+            modality=DatasetModality.TABULAR,
             problem_type=ProblemType.UNKNOWN,
             target_column=None,
             metric=None,
@@ -169,22 +229,140 @@ def infer_strategy(
         },
         "notes": [
             "This strategy was inferred deterministically from the dataset profile.",
-            "A future implementation should replace heuristic inference with an LLM call.",
+            "LLM enhancement attempted but fell back to deterministic logic.",
         ],
     }
 
-    # REAL LLM CALL boundary:
-    # response = llm_client.complete(messages=[...], response_schema=StrategySpec)
-    # return response
-
     return StrategySpec(
+        modality=DatasetModality.TABULAR,
         problem_type=problem_type,
         target_column=target_column,
         metric=_choose_metric(problem_type),
-        recommended_models=_recommended_models(problem_type),
+        recommended_models=_recommended_models_tabular(problem_type),
         preprocessing=preprocessing,
         reasoning=reasoning,
         next_actions=next_actions,
         requires_user_input=requires_user_input,
     )
+
+
+def _infer_strategy_image(profile: DatasetProfile) -> StrategySpec:
+    """
+    Infer strategy for image data.
+
+    Defaults to classification with CV models.
+    """
+    prompt_payload = profile_to_prompt_dict(profile)
+
+    # Extract class information from modality metadata
+    class_labels = profile.modality_metadata.get("class_labels", [])
+    class_distribution = profile.modality_metadata.get("class_distribution", {})
+
+    reasoning: dict[str, Any] = {
+        "prompt_payload": prompt_payload,
+        "decision": {
+            "problem_type": "classification",
+            "inferred_from": "image dataset structure",
+            "class_labels": class_labels,
+            "class_distribution": class_distribution,
+        },
+        "notes": [
+            "Image datasets default to classification tasks.",
+            "Class labels inferred from subfolder structure.",
+        ],
+    }
+
+    return StrategySpec(
+        modality=DatasetModality.IMAGE,
+        problem_type=ProblemType.CLASSIFICATION,
+        target_column=None,  # No column for image data
+        metric="accuracy",
+        recommended_models=_recommended_models_image(),
+        preprocessing=[
+            "resize",
+            "normalize",
+            "train_val_split",
+        ],
+        reasoning=reasoning,
+        next_actions=["train_cv_model"],
+        requires_user_input=False,
+    )
+
+
+def _infer_strategy_audio(profile: DatasetProfile) -> StrategySpec:
+    """
+    Infer strategy for audio data.
+
+    Defaults to classification with audio models.
+    """
+    prompt_payload = profile_to_prompt_dict(profile)
+
+    # Extract class information from modality metadata
+    class_labels = profile.modality_metadata.get("class_labels", [])
+    class_distribution = profile.modality_metadata.get("class_distribution", {})
+
+    reasoning: dict[str, Any] = {
+        "prompt_payload": prompt_payload,
+        "decision": {
+            "problem_type": "classification",
+            "inferred_from": "audio dataset structure",
+            "class_labels": class_labels,
+            "class_distribution": class_distribution,
+        },
+        "notes": [
+            "Audio datasets default to classification tasks.",
+            "Class labels inferred from subfolder structure.",
+        ],
+    }
+
+    return StrategySpec(
+        modality=DatasetModality.AUDIO,
+        problem_type=ProblemType.CLASSIFICATION,
+        target_column=None,  # No column for audio data
+        metric="accuracy",
+        recommended_models=_recommended_models_audio(),
+        preprocessing=[
+            "resample",
+            "mel_spectrogram",
+        ],
+        reasoning=reasoning,
+        next_actions=["train_audio_model"],
+        requires_user_input=False,
+    )
+
+
+def infer_strategy(
+    profile: DatasetProfile,
+    *,
+    target_column_override: str | None = None,
+) -> StrategySpec:
+    """
+    Infer an ML strategy from a DatasetProfile (modality-aware).
+
+    Routes to appropriate inference function based on dataset modality:
+    - TABULAR: Uses existing deterministic logic with optional LLM enhancement
+    - IMAGE: Classification with CV models
+    - AUDIO: Classification with audio models
+    """
+    if profile.modality == DatasetModality.TABULAR:
+        return _infer_strategy_tabular(profile, target_column_override=target_column_override)
+    elif profile.modality == DatasetModality.IMAGE:
+        return _infer_strategy_image(profile)
+    elif profile.modality == DatasetModality.AUDIO:
+        return _infer_strategy_audio(profile)
+    else:
+        # Fallback for unknown modalities
+        return StrategySpec(
+            modality=profile.modality,
+            problem_type=ProblemType.UNKNOWN,
+            target_column=None,
+            metric=None,
+            recommended_models=[],
+            preprocessing=[],
+            reasoning={
+                "error": f"Unsupported modality: {profile.modality}",
+            },
+            next_actions=["manual_review_required"],
+            requires_user_input=True,
+        )
 

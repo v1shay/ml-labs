@@ -5,9 +5,13 @@ from typing import Any
 
 import pandas as pd
 
+from pathlib import Path
+from collections import Counter
+
 from ml_labs.core.types import (
     ColumnProfile,
     DatasetProfile,
+    DatasetModality,
     SemanticType,
     TargetCandidate,
     Dataset,
@@ -129,19 +133,19 @@ def _candidate_score(
 
 
 # -------------------------------------------------
-# MAIN PROFILE FUNCTION (V3 FIXED)
+# TABULAR PROFILING
 # -------------------------------------------------
 
-def profile_dataset(dataset: Dataset) -> DatasetProfile:
+def profile_tabular(dataset: Dataset) -> DatasetProfile:
     """
-    Profile a Dataset object (v3 architecture).
+    Profile a tabular Dataset object.
 
     Extracts dataframe safely.
-    Future-proof for modality expansion.
+    Keeps all existing tabular profiling logic unchanged.
     """
 
-    if not hasattr(dataset, "dataframe"):
-        raise ValueError("Dataset does not contain a dataframe attribute")
+    if dataset.dataframe is None:
+        raise ValueError("Tabular dataset must have a dataframe")
 
     df: pd.DataFrame = dataset.dataframe
 
@@ -226,13 +230,181 @@ def profile_dataset(dataset: Dataset) -> DatasetProfile:
             }
 
     return DatasetProfile(
+        modality=DatasetModality.TABULAR,
         row_count=row_count,
         column_count=int(df.shape[1]),
         columns=columns,
         missing_by_column_pct=missing_by_col,
         target_candidates=candidates_sorted,
         class_balance=class_balance,
+        modality_metadata={},
     )
+
+
+# -------------------------------------------------
+# IMAGE PROFILING
+# -------------------------------------------------
+
+def profile_image(dataset: Dataset) -> DatasetProfile:
+    """
+    Profile an image Dataset object.
+
+    Counts images, infers class labels from subfolder names,
+    computes class distribution, and file extension stats.
+    """
+    if dataset.file_paths is None:
+        raise ValueError("Image dataset must have file_paths")
+
+    file_paths = dataset.file_paths
+    image_count = len(file_paths)
+
+    # Infer class labels from subfolder names
+    # Assumes structure: root/class_name/image.jpg
+    class_labels: dict[str, int] = {}
+    extension_counts: dict[str, int] = {}
+
+    for file_path in file_paths:
+        path_obj = Path(file_path)
+        extension = path_obj.suffix.lower()
+        extension_counts[extension] = extension_counts.get(extension, 0) + 1
+
+        # Try to infer class from parent directory name
+        # Look for a subdirectory that's not the root
+        parent = path_obj.parent
+        if parent.name and parent.name != Path(dataset.path).name:
+            class_labels[parent.name] = class_labels.get(parent.name, 0) + 1
+
+    # If no subfolder structure, treat as single class
+    if not class_labels:
+        class_labels["default"] = image_count
+
+    # Compute class distribution
+    total = sum(class_labels.values())
+    class_distribution = {
+        label: round(count / total, 6) if total > 0 else 0.0
+        for label, count in class_labels.items()
+    }
+
+    # Create empty column structures for compatibility
+    columns: dict[str, ColumnProfile] = {}
+    missing_by_col: dict[str, float] = {}
+    target_candidates: list[TargetCandidate] = []
+    class_balance: dict[str, dict[str, float]] = {}
+
+    # Store class distribution in class_balance for consistency
+    if class_distribution:
+        class_balance["inferred_class"] = class_distribution
+
+    modality_metadata: dict[str, Any] = {
+        "image_count": image_count,
+        "class_labels": list(class_labels.keys()),
+        "class_distribution": class_distribution,
+        "file_extensions": extension_counts,
+        "inferred_from_subfolders": len(class_labels) > 1 or (len(class_labels) == 1 and "default" not in class_labels),
+    }
+
+    return DatasetProfile(
+        modality=DatasetModality.IMAGE,
+        row_count=image_count,
+        column_count=0,  # No columns for image data
+        columns=columns,
+        missing_by_column_pct=missing_by_col,
+        target_candidates=target_candidates,
+        class_balance=class_balance,
+        modality_metadata=modality_metadata,
+    )
+
+
+# -------------------------------------------------
+# AUDIO PROFILING
+# -------------------------------------------------
+
+def profile_audio(dataset: Dataset) -> DatasetProfile:
+    """
+    Profile an audio Dataset object.
+
+    Counts audio files, infers class labels from subfolder names,
+    computes class distribution, and file type stats.
+    """
+    if dataset.file_paths is None:
+        raise ValueError("Audio dataset must have file_paths")
+
+    file_paths = dataset.file_paths
+    audio_count = len(file_paths)
+
+    # Infer class labels from subfolder names
+    class_labels: dict[str, int] = {}
+    extension_counts: dict[str, int] = {}
+
+    for file_path in file_paths:
+        path_obj = Path(file_path)
+        extension = path_obj.suffix.lower()
+        extension_counts[extension] = extension_counts.get(extension, 0) + 1
+
+        # Try to infer class from parent directory name
+        parent = path_obj.parent
+        if parent.name and parent.name != Path(dataset.path).name:
+            class_labels[parent.name] = class_labels.get(parent.name, 0) + 1
+
+    # If no subfolder structure, treat as single class
+    if not class_labels:
+        class_labels["default"] = audio_count
+
+    # Compute class distribution
+    total = sum(class_labels.values())
+    class_distribution = {
+        label: round(count / total, 6) if total > 0 else 0.0
+        for label, count in class_labels.items()
+    }
+
+    # Create empty column structures for compatibility
+    columns: dict[str, ColumnProfile] = {}
+    missing_by_col: dict[str, float] = {}
+    target_candidates: list[TargetCandidate] = []
+    class_balance: dict[str, dict[str, float]] = {}
+
+    # Store class distribution in class_balance for consistency
+    if class_distribution:
+        class_balance["inferred_class"] = class_distribution
+
+    modality_metadata: dict[str, Any] = {
+        "audio_count": audio_count,
+        "class_labels": list(class_labels.keys()),
+        "class_distribution": class_distribution,
+        "file_extensions": extension_counts,
+        "inferred_from_subfolders": len(class_labels) > 1 or (len(class_labels) == 1 and "default" not in class_labels),
+    }
+
+    return DatasetProfile(
+        modality=DatasetModality.AUDIO,
+        row_count=audio_count,
+        column_count=0,  # No columns for audio data
+        columns=columns,
+        missing_by_column_pct=missing_by_col,
+        target_candidates=target_candidates,
+        class_balance=class_balance,
+        modality_metadata=modality_metadata,
+    )
+
+
+# -------------------------------------------------
+# MAIN PROFILE FUNCTION (MODALITY-AWARE)
+# -------------------------------------------------
+
+def profile_dataset(dataset: Dataset) -> DatasetProfile:
+    """
+    Profile a Dataset object with modality-aware routing.
+
+    Routes to appropriate profiling function based on dataset modality.
+    """
+    if dataset.modality == DatasetModality.TABULAR:
+        return profile_tabular(dataset)
+    elif dataset.modality == DatasetModality.IMAGE:
+        return profile_image(dataset)
+    elif dataset.modality == DatasetModality.AUDIO:
+        return profile_audio(dataset)
+    else:
+        raise ValueError(f"Unsupported modality for profiling: {dataset.modality}")
 
 
 # -------------------------------------------------
@@ -240,35 +412,43 @@ def profile_dataset(dataset: Dataset) -> DatasetProfile:
 # -------------------------------------------------
 
 def profile_to_prompt_dict(profile: DatasetProfile) -> dict[str, Any]:
+    """Convert DatasetProfile to a dictionary suitable for LLM prompts."""
 
-    cols = []
-    for name in sorted(profile.columns.keys()):
-        cp = profile.columns[name]
-        cols.append(
-            {
-                "name": cp.name,
-                "dtype": cp.pandas_dtype,
-                "semantic_type": cp.semantic_type,
-                "missing_pct": cp.missing_pct,
-                "unique_count": cp.unique_count,
-                "unique_pct": cp.unique_pct,
-                "examples": cp.example_values,
-            }
-        )
-
-    candidates = [
-        {
-            "column": c.column,
-            "score": c.score,
-            "reasons": list(c.reasons),
-        }
-        for c in profile.target_candidates[:10]
-    ]
-
-    return {
+    base_dict: dict[str, Any] = {
+        "modality": profile.modality.value,
         "row_count": profile.row_count,
         "column_count": profile.column_count,
-        "columns": cols,
-        "target_candidates": candidates,
         "class_balance": profile.class_balance,
+        "modality_metadata": profile.modality_metadata,
     }
+
+    # Add tabular-specific fields
+    if profile.modality == DatasetModality.TABULAR:
+        cols = []
+        for name in sorted(profile.columns.keys()):
+            cp = profile.columns[name]
+            cols.append(
+                {
+                    "name": cp.name,
+                    "dtype": cp.pandas_dtype,
+                    "semantic_type": cp.semantic_type,
+                    "missing_pct": cp.missing_pct,
+                    "unique_count": cp.unique_count,
+                    "unique_pct": cp.unique_pct,
+                    "examples": cp.example_values,
+                }
+            )
+
+        candidates = [
+            {
+                "column": c.column,
+                "score": c.score,
+                "reasons": list(c.reasons),
+            }
+            for c in profile.target_candidates[:10]
+        ]
+
+        base_dict["columns"] = cols
+        base_dict["target_candidates"] = candidates
+
+    return base_dict

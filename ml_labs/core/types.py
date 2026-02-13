@@ -19,6 +19,13 @@ class ProblemType(str, Enum):
     UNKNOWN = "unknown"
 
 
+class DatasetModality(str, Enum):
+    TABULAR = "tabular"
+    IMAGE = "image"
+    AUDIO = "audio"
+    TEXT = "text"
+
+
 class ExecutionPhase(str, Enum):
     INITIALIZED = "initialized"
     INGESTED = "ingested"
@@ -48,7 +55,9 @@ class Dataset:
     dataset_id: str
     path: str
     loaded_at: datetime
-    dataframe: pd.DataFrame = field(repr=False)
+    modality: DatasetModality
+    dataframe: Optional[pd.DataFrame] = field(default=None, repr=False)
+    file_paths: Optional[List[str]] = field(default=None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,12 +80,14 @@ class TargetCandidate:
 
 @dataclass(frozen=True, slots=True)
 class DatasetProfile:
+    modality: DatasetModality
     row_count: int
     column_count: int
     columns: Dict[str, ColumnProfile]
     missing_by_column_pct: Dict[str, float]
     target_candidates: List[TargetCandidate]
     class_balance: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    modality_metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -86,6 +97,7 @@ class DatasetProfile:
 
 @dataclass(frozen=True, slots=True)
 class StrategySpec:
+    modality: DatasetModality
     problem_type: ProblemType
     target_column: Optional[str]
     metric: Optional[str]

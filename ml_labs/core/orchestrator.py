@@ -10,6 +10,7 @@ from ml_labs.core.types import (
     ProjectState,
     ExecutionPhase,
     ProblemType,
+    DatasetModality,
 )
 from ml_labs.core.ingest import load_dataset
 from ml_labs.core.profiler import profile_dataset
@@ -89,22 +90,53 @@ class ForgeOrchestrator:
             state.requires_user_input = True
             return
 
-        problem_type = state.strategy.problem_type
+        # Use modality-aware next_actions from strategy
+        # Strategy already sets appropriate actions based on modality:
+        # - TABULAR: ["train_tabular_model"] for classification/regression
+        # - IMAGE: ["train_cv_model"]
+        # - AUDIO: ["train_audio_model"]
+        # - UNSUPERVISED: ["run_unsupervised_analysis"]
 
-        if problem_type in (
-            ProblemType.CLASSIFICATION,
-            ProblemType.REGRESSION,
-        ):
-            state.phase = ExecutionPhase.READY_FOR_EXECUTION
-            state.next_actions = ["train_supervised_model"]
-            state.requires_user_input = False
+        problem_type = state.strategy.problem_type
+        modality = state.strategy.modality
+
+        # Validate that we have valid next_actions
+        if not state.strategy.next_actions:
+            state.phase = ExecutionPhase.FAILED
+            state.errors.append("Strategy has no next actions defined.")
             return
 
-        if problem_type == ProblemType.UNSUPERVISED:
+        # For tabular data, validate problem type
+        if modality == DatasetModality.TABULAR:
+            if problem_type in (
+                ProblemType.CLASSIFICATION,
+                ProblemType.REGRESSION,
+            ):
+                state.phase = ExecutionPhase.READY_FOR_EXECUTION
+                state.next_actions = state.strategy.next_actions
+                state.requires_user_input = False
+                return
+
+            if problem_type == ProblemType.UNSUPERVISED:
+                state.phase = ExecutionPhase.READY_FOR_EXECUTION
+                state.next_actions = state.strategy.next_actions
+                state.requires_user_input = False
+                return
+
+        # For image and audio, they default to classification
+        elif modality in (DatasetModality.IMAGE, DatasetModality.AUDIO):
+            if problem_type == ProblemType.CLASSIFICATION:
+                state.phase = ExecutionPhase.READY_FOR_EXECUTION
+                state.next_actions = state.strategy.next_actions
+                state.requires_user_input = False
+                return
+
+        # Fallback: use strategy's next_actions if available
+        if state.strategy.next_actions:
             state.phase = ExecutionPhase.READY_FOR_EXECUTION
-            state.next_actions = ["run_unsupervised_analysis"]
+            state.next_actions = state.strategy.next_actions
             state.requires_user_input = False
             return
 
         state.phase = ExecutionPhase.FAILED
-        state.errors.append("Unknown problem type.")
+        state.errors.append(f"Unknown problem type or modality: {problem_type}, {modality}")
