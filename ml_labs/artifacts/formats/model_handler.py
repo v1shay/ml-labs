@@ -1,0 +1,1 @@
+"""Model artifact format handler."""

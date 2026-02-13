@@ -1,0 +1,1 @@
+"""Configuration artifact format handler."""
