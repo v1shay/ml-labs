@@ -2,7 +2,7 @@
 name = "ml_labs"
 version = "0.1.0"
 description = "ML Labs Engine"
-requires-python = ">=3.10"
+requires-python = ">=3.11,<3.12"
 
 [build-system]
 requires = ["setuptools"]
