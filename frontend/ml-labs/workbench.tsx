@@ -22,6 +22,7 @@ type ShellPhase =
   | "idle"
   | "intake"
   | "searching"
+  | "targetPick"
   | "streaming"
   | "debating"
   | "particles"
@@ -99,18 +100,19 @@ type SourceRequest =
 
 export function MlLabsWorkbench() {
   const [input, setInput] = useState("");
-  const [phase, setPhase] = useState<ShellPhase>("idle");
+  const [phase, setPhase] = useState<ShellPhase>("intake");
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "control-ready",
       speaker: "control",
-      text: "Control online. Send any instruction and I will start dataset inspection.",
+      text: "ML-Labs Control online. Pick a dataset source on the right to begin a run.",
     },
   ]);
   const [sourceResolution, setSourceResolution] = useState<SourceResolveResult | null>(null);
   const [activePrompt, setActivePrompt] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [runResult, setRunResult] = useState<LabRunResult | null>(null);
+  const [selectedTarget, setSelectedTarget] = useState<string>("");
   const timers = useRef<number[]>([]);
 
   useEffect(() => {
@@ -118,8 +120,8 @@ export function MlLabsWorkbench() {
   }, []);
 
   const profile = useMemo(
-    () => (sourceResolution ? buildIngestionProfile(sourceResolution) : null),
-    [sourceResolution],
+    () => (sourceResolution ? buildIngestionProfile(sourceResolution, selectedTarget) : null),
+    [selectedTarget, sourceResolution],
   );
   const modelFamilies = useMemo(
     () => (profile ? buildModelFamilies(profile, runResult) : []),
@@ -129,24 +131,26 @@ export function MlLabsWorkbench() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const prompt = input.trim() || "Start dataset inspection and open the modeling surface.";
+    const prompt = input.trim();
+    if (!prompt) {
+      return;
+    }
 
-    clearTimers(timers.current);
     setInput("");
     setActivePrompt(prompt);
-    setSourceResolution(null);
-    setRunResult(null);
-    setErrorMessage(null);
-    setPhase("intake");
     setMessages((current) => [
       ...current,
       { id: `user-${Date.now()}`, speaker: "user", text: prompt },
       {
         id: `control-${Date.now()}`,
         speaker: "control",
-        text: "Data Intake Agent is opening source channels for ZIP, Kaggle API, and connector-backed tables.",
+        text: "Project brief noted. Pick a dataset source on the right to start the run.",
       },
     ]);
+  }
+
+  function handleBriefChange(nextPrompt: string) {
+    setActivePrompt(nextPrompt);
   }
 
   async function startSourceResolution(request: SourceRequest) {
@@ -164,6 +168,7 @@ export function MlLabsWorkbench() {
     setSourceResolution(null);
     setRunResult(null);
     setErrorMessage(null);
+    setSelectedTarget("");
     setMessages((current) => [
       ...current,
       {
@@ -184,6 +189,10 @@ export function MlLabsWorkbench() {
         request.kind === "localFallback" || (request.kind === "kaggle" && !hasKaggleReference),
       );
       setSourceResolution(resolved);
+      const defaultTarget =
+        resolved.targetSuggestions[0]?.column ?? resolved.headers.at(-1) ?? "";
+      setSelectedTarget(defaultTarget);
+      setPhase("targetPick");
       setMessages((current) => [
         ...current,
         usedLocalFallback
@@ -196,11 +205,9 @@ export function MlLabsWorkbench() {
         {
           id: `control-resolved-${Date.now()}`,
           speaker: "control",
-          text: `${requestLabel} resolved. Dataset understanding profiled on ${resolved.selectedFilePath ?? resolved.sourceLabel}.`,
+          text: `${requestLabel} resolved on ${resolved.selectedFilePath ?? resolved.sourceLabel}. Choose what we should predict.`,
         },
       ].filter((message): message is ChatMessage => Boolean(message)));
-      void attemptModelRun(resolved, activePrompt || requestLabel);
-      schedulePanelSequence();
     } catch (error) {
       const details = error instanceof Error ? error.message : "Inspection failed.";
       setPhase("error");
@@ -212,7 +219,29 @@ export function MlLabsWorkbench() {
     }
   }
 
-  async function attemptModelRun(resolved: SourceResolveResult, prompt: string) {
+  function handleTargetConfirm(target: string) {
+    if (!sourceResolution || !target) {
+      return;
+    }
+    const trimmed = target.trim();
+    setSelectedTarget(trimmed);
+    setMessages((current) => [
+      ...current,
+      {
+        id: `control-target-${Date.now()}`,
+        speaker: "control",
+        text: `Target confirmed: ${trimmed}. Starting model search and code generation.`,
+      },
+    ]);
+    void attemptModelRun(sourceResolution, trimmed, activePrompt || `Predict ${trimmed}`);
+    schedulePanelSequence();
+  }
+
+  async function attemptModelRun(
+    resolved: SourceResolveResult,
+    targetColumn: string,
+    prompt: string,
+  ) {
     if (!resolved.sourceToken) {
       return;
     }
@@ -220,7 +249,7 @@ export function MlLabsWorkbench() {
     try {
       const formData = new FormData();
       formData.set("sourceToken", resolved.sourceToken);
-      formData.set("targetColumn", resolved.targetSuggestions[0]?.column ?? resolved.headers.at(-1) ?? "");
+      formData.set("targetColumn", targetColumn);
       formData.set("intentPrompt", prompt);
       const response = await fetch("/api/lab/run", { method: "POST", body: formData });
       const payload = (await response.json()) as LabRunResult | LabRunError;
@@ -291,11 +320,11 @@ export function MlLabsWorkbench() {
           <textarea
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            placeholder="Ask Control to open a data surface..."
+            placeholder="Optional: log a note for Control while a run is active..."
             rows={4}
           />
-          <button type="submit" disabled={phase === "searching"}>
-            {phase === "searching" ? "Resolving" : "Send"}
+          <button type="submit" disabled={phase === "searching" || !input.trim()}>
+            {phase === "searching" ? "Resolving" : "Log note"}
           </button>
         </form>
       </aside>
@@ -306,18 +335,25 @@ export function MlLabsWorkbench() {
             <span>Active Agents</span>
             <strong>{activeAgents.join(" / ")}</strong>
           </div>
-          <p>{activePrompt || "No active instruction."}</p>
+          <p>{activePrompt || "Project brief not provided yet — pick a dataset source to begin."}</p>
         </header>
 
         <div className="active-panel-stage">
-          {phase === "idle" ? <IdlePanel /> : null}
-          {phase === "intake" ? (
+          {phase === "idle" || phase === "intake" ? (
             <DataIntakePanel
               prompt={activePrompt}
+              onPromptChange={handleBriefChange}
               onResolve={(request) => void startSourceResolution(request)}
             />
           ) : null}
           {phase === "searching" ? <DataPanelSearch prompt={activePrompt} /> : null}
+          {phase === "targetPick" && sourceResolution ? (
+            <TargetSelectionPanel
+              source={sourceResolution}
+              defaultTarget={selectedTarget || sourceResolution.targetSuggestions[0]?.column || sourceResolution.headers[0] || ""}
+              onConfirm={handleTargetConfirm}
+            />
+          ) : null}
           {phase === "streaming" && sourceResolution && profile ? (
             <DataStreamPanel source={sourceResolution} profile={profile} />
           ) : null}
@@ -367,24 +403,13 @@ export function MlLabsWorkbench() {
   );
 }
 
-function IdlePanel() {
-  return (
-    <article className="agent-panel compact-panel">
-      <span className="panel-kicker">Workbench</span>
-      <h1>Control is waiting on a data instruction.</h1>
-      <p>
-        The workspace stays empty until an agent opens a surface. No queued panels, no visible
-        route map.
-      </p>
-    </article>
-  );
-}
-
 function DataIntakePanel({
   prompt,
+  onPromptChange,
   onResolve,
 }: {
   prompt: string;
+  onPromptChange: (next: string) => void;
   onResolve: (request: SourceRequest) => void;
 }) {
   const [dragActive, setDragActive] = useState(false);
@@ -415,25 +440,12 @@ function DataIntakePanel({
 
   return (
     <article className="agent-panel intake-panel">
-      <PanelHeader agent="Data Intake Agent" title="Source channel selection" />
+      <PanelHeader agent="ML-Labs Intake" title="Choose a dataset source" />
       <div className="intake-layout">
-        <label
-          className={dragActive ? "intake-card zip-card active" : "intake-card zip-card"}
-          onDragOver={(event) => {
-            event.preventDefault();
-            setDragActive(true);
-          }}
-          onDragLeave={() => setDragActive(false)}
-          onDrop={handleDrop}
-        >
-          <input type="file" accept=".zip,.csv,text/csv,application/zip" onChange={handleFileChange} />
-          <span>ZIP / CSV upload</span>
-          <strong>largest CSV extraction</strong>
-          <p>Drop a dataset archive. The resolver extracts the largest CSV, profiles the schema, and opens the existing analysis surface.</p>
-        </label>
         <section className="intake-card kaggle-card">
-          <span>Kaggle API</span>
-          <strong>resolver path active</strong>
+          <span>Kaggle</span>
+          <strong>Kaggle API resolver</strong>
+          <p>Paste a Kaggle dataset slug, URL, or kagglehub snippet to pull the table directly.</p>
           <textarea
             value={kaggleInput}
             onChange={(event) => setKaggleInput(event.target.value)}
@@ -444,18 +456,135 @@ function DataIntakePanel({
             Resolve Kaggle table
           </button>
         </section>
-        <section className="intake-card mcp-card">
-          <span>MCP connector</span>
-          <strong>connector staged</strong>
-          <p>Structured dataset handoff is reserved for a connected MCP source. This lane stays visible but does not claim a live connector.</p>
-          <button type="button" disabled>
-            Awaiting connector
+        <label
+          className={dragActive ? "intake-card zip-card active" : "intake-card zip-card"}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={handleDrop}
+        >
+          <input type="file" accept=".zip,.csv,text/csv,application/zip" onChange={handleFileChange} />
+          <span>Upload CSV</span>
+          <strong>CSV or ZIP archive</strong>
+          <p>Drop a CSV or ZIP file. The resolver extracts the largest CSV inside a ZIP and opens the inspection surface.</p>
+        </label>
+        <section className="intake-card demo-card">
+          <span>Demo</span>
+          <strong>ML-Labs demo dataset</strong>
+          <p>Open the bundled customer-churn working table. Useful for first-time runs and screen recordings.</p>
+          <button
+            type="button"
+            onClick={() =>
+              onResolve({ kind: "localFallback", kaggleInput: DEFAULT_KAGGLE_INPUT })
+            }
+          >
+            Use demo dataset
           </button>
         </section>
       </div>
-      <div className="intake-footer">
-        <button type="button" onClick={() => onResolve({ kind: "localFallback", kaggleInput: DEFAULT_KAGGLE_INPUT })}>
-          Let ML-Labs locate a working table
+      <section className="intake-brief">
+        <span>Project brief (optional)</span>
+        <strong>What do you want this model to do?</strong>
+        <textarea
+          value={prompt}
+          onChange={(event) => onPromptChange(event.target.value)}
+          rows={3}
+          aria-label="Project brief"
+          placeholder="e.g. predict customer churn from tenure, billing, and engagement signals"
+        />
+        <p>This brief is forwarded to the modeling agents as the run intent. You can also leave it blank.</p>
+      </section>
+    </article>
+  );
+}
+
+function TargetSelectionPanel({
+  source,
+  defaultTarget,
+  onConfirm,
+}: {
+  source: SourceResolveResult;
+  defaultTarget: string;
+  onConfirm: (target: string) => void;
+}) {
+  const [pick, setPick] = useState(defaultTarget);
+  const headers = source.headers.length ? source.headers : [defaultTarget].filter(Boolean);
+  const suggestions = source.targetSuggestions ?? [];
+  const previewSampleSize = Math.min(source.previewRows.length, 24);
+  const targetIndex = Math.max(headers.indexOf(pick), 0);
+  const previewSample = source.previewRows.slice(0, previewSampleSize)
+    .map((row) => row[targetIndex] ?? "")
+    .filter((value) => value !== undefined);
+
+  return (
+    <article className="agent-panel target-panel">
+      <PanelHeader agent="Problem Framing Agent" title="What should we predict?" />
+      <div className="target-layout">
+        <section className="target-suggestion-card">
+          <span>Top suggestions</span>
+          <div className="target-suggestion-list">
+            {suggestions.length === 0 ? (
+              <p>No automated suggestions surfaced. Pick any column from the dataset list.</p>
+            ) : null}
+            {suggestions.map((suggestion) => {
+              const isActive = suggestion.column === pick;
+              return (
+                <button
+                  key={suggestion.column}
+                  type="button"
+                  className={isActive ? "target-suggestion active" : "target-suggestion"}
+                  onClick={() => setPick(suggestion.column)}
+                >
+                  <strong>{suggestion.column}</strong>
+                  <em>{Math.round(suggestion.confidence * 100)}% confidence</em>
+                  <p>{suggestion.reason}</p>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+        <section className="target-headers-card">
+          <span>All columns</span>
+          <select
+            value={pick}
+            onChange={(event) => setPick(event.target.value)}
+            aria-label="Target column"
+          >
+            {headers.map((header) => (
+              <option key={header} value={header}>
+                {header}
+              </option>
+            ))}
+          </select>
+          <div className="target-preview">
+            <span>Sample target values</span>
+            <div className="target-preview-grid">
+              {previewSample.length === 0 ? (
+                <p>No preview rows are available for this column.</p>
+              ) : (
+                previewSample
+                  .slice(0, 10)
+                  .map((value, index) => (
+                    <code key={`${value}-${index}`}>{value || "null"}</code>
+                  ))
+              )}
+            </div>
+          </div>
+        </section>
+      </div>
+      <div className="target-footer">
+        <p>
+          ML-Labs will frame the task automatically: the column type and cardinality decide whether
+          this becomes regression, binary classification, or multiclass classification.
+        </p>
+        <button
+          type="button"
+          onClick={() => onConfirm(pick)}
+          disabled={!pick}
+        >
+          Run with target “{pick || "—"}”
         </button>
       </div>
     </article>
@@ -1569,6 +1698,9 @@ function getActiveAgents(phase: ShellPhase): string[] {
   if (phase === "searching" || phase === "streaming") {
     return ["Control", "Data Panel"];
   }
+  if (phase === "targetPick") {
+    return ["Control", "Problem Framing"];
+  }
   if (phase === "debating") {
     return ["Control", "Schema", "Quality", "Readiness"];
   }
@@ -1617,9 +1749,16 @@ function getActiveAgents(phase: ShellPhase): string[] {
   return ["Control"];
 }
 
-function buildIngestionProfile(source: SourceResolveResult): IngestionProfile {
+function buildIngestionProfile(
+  source: SourceResolveResult,
+  targetOverride?: string,
+): IngestionProfile {
   const rows = source.previewRows;
-  const targetColumn = source.targetSuggestions[0]?.column ?? source.headers.at(-1) ?? "target";
+  const targetColumn =
+    (targetOverride && source.headers.includes(targetOverride) ? targetOverride : null) ??
+    source.targetSuggestions[0]?.column ??
+    source.headers.at(-1) ??
+    "target";
   const targetIndex = Math.max(source.headers.indexOf(targetColumn), 0);
   const columns = source.headers.map((name, columnIndex): ColumnProfile => {
     const rawValues = rows.map((row) => row[columnIndex] ?? "");

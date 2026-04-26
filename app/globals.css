@@ -973,6 +973,199 @@ a {
   justify-content: flex-end;
 }
 
+.intake-panel {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+}
+
+.intake-brief {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--ide-line);
+  border-radius: 8px;
+  padding: 14px;
+  background: linear-gradient(180deg, rgba(143, 183, 255, 0.05), rgba(7, 9, 11, 0.95));
+}
+
+.intake-brief textarea {
+  min-height: 76px;
+  border: 1px solid var(--ide-line);
+  border-radius: 7px;
+  padding: 10px 12px;
+  resize: vertical;
+  background: #07090b;
+  color: var(--ide-text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", sans-serif;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.intake-brief textarea::placeholder {
+  color: var(--ide-soft);
+}
+
+.intake-brief strong {
+  color: var(--ide-text);
+  font-size: 1.02rem;
+  font-weight: 650;
+}
+
+.demo-card button {
+  margin-top: auto;
+}
+
+.target-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 14px;
+}
+
+.target-layout {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 12px;
+}
+
+.target-suggestion-card,
+.target-headers-card {
+  border: 1px solid var(--ide-line);
+  border-radius: 8px;
+  background: #080a0c;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.target-suggestion-list {
+  display: grid;
+  gap: 8px;
+}
+
+.target-suggestion {
+  text-align: left;
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid var(--ide-line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--ide-text);
+  cursor: pointer;
+}
+
+.target-suggestion:hover {
+  border-color: rgba(143, 183, 255, 0.46);
+  background: rgba(143, 183, 255, 0.07);
+}
+
+.target-suggestion.active {
+  border-color: rgba(143, 183, 255, 0.7);
+  background: rgba(143, 183, 255, 0.12);
+}
+
+.target-suggestion strong {
+  color: var(--ide-text);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.92rem;
+}
+
+.target-suggestion em {
+  color: var(--ide-accent);
+  font-style: normal;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.target-suggestion p {
+  margin: 0;
+  color: var(--ide-muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.target-headers-card select {
+  border: 1px solid var(--ide-line);
+  border-radius: 7px;
+  padding: 9px 10px;
+  background: #07090b;
+  color: var(--ide-text);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.84rem;
+}
+
+.target-preview {
+  display: grid;
+  gap: 8px;
+}
+
+.target-preview-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.target-preview-grid code {
+  display: inline-block;
+  border: 1px solid var(--ide-line);
+  border-radius: 5px;
+  padding: 4px 8px;
+  background: #07090b;
+  color: var(--ide-text);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+}
+
+.target-preview-grid p {
+  margin: 0;
+  color: var(--ide-muted);
+  font-size: 0.82rem;
+}
+
+.target-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--ide-line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: #080a0c;
+}
+
+.target-footer p {
+  margin: 0;
+  color: var(--ide-muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+  flex: 1 1 320px;
+}
+
+.target-footer button {
+  border: 1px solid rgba(143, 183, 255, 0.5);
+  border-radius: 6px;
+  padding: 9px 14px;
+  background: rgba(143, 183, 255, 0.14);
+  color: var(--ide-text);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.target-footer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  border-color: var(--ide-line);
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .codegen-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
