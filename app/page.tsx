@@ -1,5 +1,5 @@
-import { MlWorkbench } from "@/components/ml-labs/workbench";
+import { MlLabsWorkbench } from "@/frontend/ml-labs/workbench";
 
 export default function HomePage() {
-  return <MlWorkbench />;
+  return <MlLabsWorkbench />;
 }
