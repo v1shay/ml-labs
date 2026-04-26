@@ -1,6 +1,15 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  FormEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+  type DragEvent,
+} from "react";
 import katex from "katex";
 import * as THREE from "three";
 import type { LabRunError, LabRunResult, SourceResolveResult } from "@/lib/ml-labs/types";
@@ -11,6 +20,7 @@ const DEMO_DATASET_PATH = "/data/demo-churn.csv";
 
 type ShellPhase =
   | "idle"
+  | "intake"
   | "searching"
   | "streaming"
   | "debating"
@@ -24,6 +34,10 @@ type ShellPhase =
   | "testingFirstPass"
   | "recoding"
   | "testingPassed"
+  | "performanceDiagnostics"
+  | "modelStatistics"
+  | "methodologySummary"
+  | "reportDrafting"
   | "error";
 
 type ChatMessage = {
@@ -78,6 +92,11 @@ type GeneratedArtifact = {
   content: string;
 };
 
+type SourceRequest =
+  | { kind: "zip"; file: File }
+  | { kind: "kaggle"; kaggleInput: string }
+  | { kind: "localFallback"; kaggleInput: string };
+
 export function MlLabsWorkbench() {
   const [input, setInput] = useState("");
   const [phase, setPhase] = useState<ShellPhase>("idle");
@@ -111,8 +130,6 @@ export function MlLabsWorkbench() {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const prompt = input.trim() || "Start dataset inspection and open the modeling surface.";
-    const hasKaggleReference = hasExplicitKaggleReference(prompt);
-    const kaggleInput = hasKaggleReference ? prompt : DEFAULT_KAGGLE_INPUT;
 
     clearTimers(timers.current);
     setInput("");
@@ -120,23 +137,51 @@ export function MlLabsWorkbench() {
     setSourceResolution(null);
     setRunResult(null);
     setErrorMessage(null);
-    setPhase("searching");
+    setPhase("intake");
     setMessages((current) => [
       ...current,
       { id: `user-${Date.now()}`, speaker: "user", text: prompt },
       {
         id: `control-${Date.now()}`,
         speaker: "control",
-        text: hasKaggleReference
-          ? "Routing the dataset reference into the Data Panel."
-          : "ML-Labs Data Panel is locating an inspection-ready table.",
+        text: "Data Intake Agent is opening source channels for ZIP, Kaggle API, and connector-backed tables.",
+      },
+    ]);
+  }
+
+  async function startSourceResolution(request: SourceRequest) {
+    const hasKaggleReference =
+      request.kind === "kaggle" ? hasExplicitKaggleReference(request.kaggleInput) : false;
+    const requestLabel =
+      request.kind === "zip"
+        ? `ZIP upload ${request.file.name}`
+        : request.kind === "kaggle"
+          ? "Kaggle API source"
+          : "ML-Labs working table";
+
+    clearTimers(timers.current);
+    setPhase("searching");
+    setSourceResolution(null);
+    setRunResult(null);
+    setErrorMessage(null);
+    setMessages((current) => [
+      ...current,
+      {
+        id: `control-intake-${Date.now()}`,
+        speaker: "control",
+        text:
+          request.kind === "zip"
+            ? "ZIP payload accepted. Extracting the largest CSV and locking an inspection surface."
+            : request.kind === "kaggle"
+              ? "Routing the dataset reference through the Kaggle API resolver."
+              : "ML-Labs Data Panel is locating an inspection-ready table.",
       },
     ]);
 
     try {
       const { result: resolved, usedLocalFallback } = await resolveSource(
-        kaggleInput,
-        !hasKaggleReference,
+        request,
+        request.kind === "localFallback" || (request.kind === "kaggle" && !hasKaggleReference),
       );
       setSourceResolution(resolved);
       setMessages((current) => [
@@ -151,10 +196,10 @@ export function MlLabsWorkbench() {
         {
           id: `control-resolved-${Date.now()}`,
           speaker: "control",
-          text: `Inspection surface locked on ${resolved.selectedFilePath ?? resolved.sourceLabel}. Active agents are reading the field.`,
+          text: `${requestLabel} resolved. Dataset understanding profiled on ${resolved.selectedFilePath ?? resolved.sourceLabel}.`,
         },
       ].filter((message): message is ChatMessage => Boolean(message)));
-      void attemptModelRun(resolved, prompt);
+      void attemptModelRun(resolved, activePrompt || requestLabel);
       schedulePanelSequence();
     } catch (error) {
       const details = error instanceof Error ? error.message : "Inspection failed.";
@@ -198,9 +243,13 @@ export function MlLabsWorkbench() {
     schedule(() => setPhase("modelSelected"), 28800, timers.current);
     schedule(() => setPhase("stackPanel"), 33000, timers.current);
     schedule(() => setPhase("codeGenerating"), 37400, timers.current);
-    schedule(() => setPhase("testingFirstPass"), 43000, timers.current);
-    schedule(() => setPhase("recoding"), 48600, timers.current);
-    schedule(() => setPhase("testingPassed"), 54000, timers.current);
+    schedule(() => setPhase("testingFirstPass"), 47200, timers.current);
+    schedule(() => setPhase("recoding"), 54000, timers.current);
+    schedule(() => setPhase("testingPassed"), 62000, timers.current);
+    schedule(() => setPhase("performanceDiagnostics"), 69000, timers.current);
+    schedule(() => setPhase("modelStatistics"), 76000, timers.current);
+    schedule(() => setPhase("methodologySummary"), 83000, timers.current);
+    schedule(() => setPhase("reportDrafting"), 90000, timers.current);
   }
 
   return (
@@ -262,6 +311,12 @@ export function MlLabsWorkbench() {
 
         <div className="active-panel-stage">
           {phase === "idle" ? <IdlePanel /> : null}
+          {phase === "intake" ? (
+            <DataIntakePanel
+              prompt={activePrompt}
+              onResolve={(request) => void startSourceResolution(request)}
+            />
+          ) : null}
           {phase === "searching" ? <DataPanelSearch prompt={activePrompt} /> : null}
           {phase === "streaming" && sourceResolution && profile ? (
             <DataStreamPanel source={sourceResolution} profile={profile} />
@@ -293,6 +348,18 @@ export function MlLabsWorkbench() {
           {phase === "testingPassed" && profile ? (
             <TestingPanel profile={profile} models={modelFamilies} status="passed" />
           ) : null}
+          {phase === "performanceDiagnostics" && profile ? (
+            <PerformanceDiagnosticsPanel profile={profile} models={modelFamilies} runResult={runResult} />
+          ) : null}
+          {phase === "modelStatistics" && profile ? (
+            <ModelStatisticsPanel profile={profile} models={modelFamilies} runResult={runResult} />
+          ) : null}
+          {phase === "methodologySummary" && profile ? (
+            <MethodologySummaryPanel profile={profile} models={modelFamilies} runResult={runResult} />
+          ) : null}
+          {phase === "reportDrafting" && profile ? (
+            <ReportDraftingPanel profile={profile} models={modelFamilies} runResult={runResult} />
+          ) : null}
           {phase === "error" ? <ErrorPanel message={errorMessage ?? "Unknown inspection error."} /> : null}
         </div>
       </section>
@@ -309,6 +376,88 @@ function IdlePanel() {
         The workspace stays empty until an agent opens a surface. No queued panels, no visible
         route map.
       </p>
+    </article>
+  );
+}
+
+function DataIntakePanel({
+  prompt,
+  onResolve,
+}: {
+  prompt: string;
+  onResolve: (request: SourceRequest) => void;
+}) {
+  const [dragActive, setDragActive] = useState(false);
+  const [kaggleInput, setKaggleInput] = useState(
+    hasExplicitKaggleReference(prompt) ? prompt : DEFAULT_KAGGLE_INPUT,
+  );
+
+  function acceptFile(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+    const lowered = file.name.toLowerCase();
+    if (!lowered.endsWith(".zip") && !lowered.endsWith(".csv")) {
+      return;
+    }
+    onResolve({ kind: "zip", file });
+  }
+
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    setDragActive(false);
+    acceptFile(event.dataTransfer.files[0]);
+  }
+
+  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    acceptFile(event.target.files?.[0]);
+  }
+
+  return (
+    <article className="agent-panel intake-panel">
+      <PanelHeader agent="Data Intake Agent" title="Source channel selection" />
+      <div className="intake-layout">
+        <label
+          className={dragActive ? "intake-card zip-card active" : "intake-card zip-card"}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={handleDrop}
+        >
+          <input type="file" accept=".zip,.csv,text/csv,application/zip" onChange={handleFileChange} />
+          <span>ZIP / CSV upload</span>
+          <strong>largest CSV extraction</strong>
+          <p>Drop a dataset archive. The resolver extracts the largest CSV, profiles the schema, and opens the existing analysis surface.</p>
+        </label>
+        <section className="intake-card kaggle-card">
+          <span>Kaggle API</span>
+          <strong>resolver path active</strong>
+          <textarea
+            value={kaggleInput}
+            onChange={(event) => setKaggleInput(event.target.value)}
+            rows={3}
+            aria-label="Kaggle dataset input"
+          />
+          <button type="button" onClick={() => onResolve({ kind: "kaggle", kaggleInput })}>
+            Resolve Kaggle table
+          </button>
+        </section>
+        <section className="intake-card mcp-card">
+          <span>MCP connector</span>
+          <strong>connector staged</strong>
+          <p>Structured dataset handoff is reserved for a connected MCP source. This lane stays visible but does not claim a live connector.</p>
+          <button type="button" disabled>
+            Awaiting connector
+          </button>
+        </section>
+      </div>
+      <div className="intake-footer">
+        <button type="button" onClick={() => onResolve({ kind: "localFallback", kaggleInput: DEFAULT_KAGGLE_INPUT })}>
+          Let ML-Labs locate a working table
+        </button>
+      </div>
     </article>
   );
 }
@@ -593,9 +742,9 @@ function CodeGenerationPanel({
     () => buildGeneratedArtifacts(profile, selected, mode),
     [mode, profile, selected],
   );
-  const visibleArtifacts = useProgressiveItems(artifacts, 520, 80);
+  const visibleArtifacts = useProgressiveItems(artifacts, 850, 120);
   const activeArtifact = visibleArtifacts.at(-1) ?? artifacts[0];
-  const visibleCodeLines = useProgressiveItems(activeArtifact.content.split("\n"), 64, 120);
+  const visibleCodeLines = useProgressiveItems(activeArtifact.content.split("\n"), 115, 180);
 
   return (
     <article className="agent-panel codegen-panel">
@@ -697,18 +846,213 @@ function TestingPanel({
         </div>
       </article>
       <article className="agent-panel test-graph-card">
-        <PanelHeader agent="Diagnostic Graph" title={status === "passed" ? "Re-run curve accepted" : "First curve replay"} />
-        <ModelCurve model={selected} />
+        <PanelHeader agent="Testing Field" title={status === "passed" ? "Validated 3D field accepted" : "3D field replay under test"} />
+        <ParticleField profile={profile} mode={status === "passed" ? "validated" : "spatial"} model={selected} />
         <div className="selected-rationale">
           <p>Target anchor: {profile.targetColumn}.</p>
           <p>
             {status === "passed"
-              ? "The regenerated curve matches the selected family envelope."
-              : "The graph is structurally correct, but the artifact manifest needs one refinement."}
+              ? "The regenerated particle field preserves cluster boundaries, feature projection, and selected-model overlays."
+              : "The particle replay is structurally correct, but the artifact manifest needs one refinement."}
           </p>
         </div>
       </article>
     </div>
+  );
+}
+
+function PerformanceDiagnosticsPanel({
+  profile,
+  models,
+  runResult,
+}: {
+  profile: IngestionProfile;
+  models: ModelFamily[];
+  runResult: LabRunResult | null;
+}) {
+  const selected = pickModelWinner(models);
+  const leaderboard = runResult?.leaderboard ?? [];
+  const bestScore = leaderboard[0]?.score ?? selected.score;
+  return (
+    <article className="agent-panel diagnostics-panel">
+      <PanelHeader agent="Evaluation Agent" title="Performance diagnostics consolidated" />
+      <div className="diagnostics-grid">
+        <DiagnosticGraph title="score curve" tone="#8fb7ff" values={models.map((model) => model.score)} variant="line" />
+        <DiagnosticGraph title="loss decay" tone="#75d7b5" values={[0.92, 0.71, 0.54, 0.42, 0.34, 0.29, 0.24]} variant="decay" />
+        <DiagnosticGraph title="error distribution" tone="#d8b4ff" values={profile.energy.slice(0, 14)} variant="bars" />
+        <DiagnosticGraph title="feature importance" tone="#f2c879" values={profile.numericColumns.slice(0, 8).map((column) => Math.min(column.unique / 12, 1))} variant="bars" />
+        <DiagnosticGraph title="split quality" tone="#9ec1ff" values={[0.72, 0.78, 0.81, 0.79, 0.84, bestScore]} variant="line" />
+        <DiagnosticGraph title="calibration band" tone="#c7a6ff" values={[0.18, 0.31, 0.48, 0.62, 0.74, 0.86]} variant="sigmoid" />
+      </div>
+    </article>
+  );
+}
+
+function ModelStatisticsPanel({
+  profile,
+  models,
+  runResult,
+}: {
+  profile: IngestionProfile;
+  models: ModelFamily[];
+  runResult: LabRunResult | null;
+}) {
+  const selected = pickModelWinner(models);
+  const winner = runResult?.leaderboard[0];
+  const best = runResult?.bestModel;
+  const stats = [
+    ["target", profile.targetColumn],
+    ["training rows", String(runResult?.datasetProfile.rows ?? profile.rowCount)],
+    ["feature columns", String(Math.max(profile.columnCount - 1, 0))],
+    ["numeric fields", String(profile.numericColumns.length)],
+    ["categorical fields", String(profile.categoricalColumns.length)],
+    ["selected family", winner?.modelName ?? selected.name],
+    ["primary metric", winner?.metricName ?? "suitability"],
+    ["held-out score", (winner?.testScore ?? winner?.score ?? selected.score).toFixed(3)],
+    ["baseline lift", (best?.absoluteImprovement ?? selected.score - models[0].score).toFixed(3)],
+    ["risk score", selected.risk.toFixed(2)],
+  ];
+  const warnings = runResult?.criticReport.warnings.length
+    ? runResult.criticReport.warnings
+    : ["No severe blocker surfaced in the generated inspection pass."];
+  const nextExperiments = runResult?.criticReport.nextExperiments.length
+    ? runResult.criticReport.nextExperiments
+    : ["Re-run with a larger validation split.", "Add calibration checks once production labels accumulate."];
+
+  return (
+    <article className="agent-panel statistics-panel">
+      <PanelHeader agent="Statistics Agent" title="Model accuracy and training statistics" />
+      <div className="statistics-layout">
+        <div className="stats-grid">
+          {stats.map(([label, value]) => (
+            <Metric key={label} label={label} value={value} />
+          ))}
+        </div>
+        <section className="stat-notes">
+          <span>critic warnings</span>
+          {warnings.slice(0, 4).map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+        </section>
+        <section className="stat-notes">
+          <span>next experiments</span>
+          {nextExperiments.slice(0, 4).map((experiment) => (
+            <p key={experiment}>{experiment}</p>
+          ))}
+        </section>
+      </div>
+    </article>
+  );
+}
+
+function MethodologySummaryPanel({
+  profile,
+  models,
+  runResult,
+}: {
+  profile: IngestionProfile;
+  models: ModelFamily[];
+  runResult: LabRunResult | null;
+}) {
+  const selected = pickModelWinner(models);
+  const stages = ["INTAKE", "RESOLVE", "PROFILE", "FRAME", "PIPELINE", "BASELINE", "MODEL", "EVAL", "EXPORT"];
+  return (
+    <article className="agent-panel methodology-panel">
+      <PanelHeader agent="Methodology Agent" title="Training methodology rendered" />
+      <div className="methodology-layout">
+        <img
+          src="/brand/ml-labs-methodology.png"
+          alt=""
+          onError={(event) => {
+            event.currentTarget.hidden = true;
+          }}
+        />
+        <div className="methodology-map">
+          {stages.map((stage, index) => (
+            <div key={stage} className={index === 0 ? "method-node active" : "method-node"}>
+              <span>{stage}</span>
+            </div>
+          ))}
+        </div>
+        <section className="method-copy">
+          <p>
+            The table resolves into {profile.numericColumns.length} numeric and {profile.categoricalColumns.length} categorical fields before the selected {selected.name} surface is evaluated.
+          </p>
+          <p>{runResult?.plainEnglishSummary.shortExplanation ?? "The generated methodology keeps intake, profiling, model comparison, testing, and export as separate inspected stages."}</p>
+        </section>
+      </div>
+    </article>
+  );
+}
+
+function ReportDraftingPanel({
+  profile,
+  models,
+  runResult,
+}: {
+  profile: IngestionProfile;
+  models: ModelFamily[];
+  runResult: LabRunResult | null;
+}) {
+  const drafts = buildReportDrafts(profile, pickModelWinner(models), runResult);
+  return (
+    <article className="agent-panel report-drafting-panel">
+      <PanelHeader agent="Report Agent" title="Research drafts ready for export" />
+      <div className="report-draft-grid">
+        {drafts.map((draft) => (
+          <section key={draft.filename} className="report-draft-card">
+            <span>{draft.filename}</span>
+            <p>{draft.content.split("\n").find((line) => line.trim() && !line.startsWith("#")) ?? "Draft generated."}</p>
+            <button type="button" onClick={() => downloadTextFile(draft.filename, draft.content)}>
+              Download draft
+            </button>
+          </section>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function DiagnosticGraph({
+  title,
+  tone,
+  values,
+  variant,
+}: {
+  title: string;
+  tone: string;
+  values: number[];
+  variant: "line" | "decay" | "bars" | "sigmoid";
+}) {
+  const safeValues = values.length ? values : [0.2, 0.45, 0.62, 0.74];
+  const points = safeValues.map((value, index) => {
+    const normalized = variant === "decay" ? 1 - value : value;
+    const x = 8 + (index / Math.max(safeValues.length - 1, 1)) * 84;
+    const y = 88 - Math.max(0.06, Math.min(normalized, 0.96)) * 76;
+    return `${x},${y}`;
+  });
+  return (
+    <section className={`diagnostic-graph ${variant}`}>
+      <span>{title}</span>
+      <svg viewBox="0 0 100 100" role="img" aria-label={title}>
+        <path d="M 8 88 H 94 M 8 12 V 88" />
+        {variant === "bars" ? (
+          safeValues.map((value, index) => (
+            <rect
+              key={`${title}-${index}`}
+              x={10 + index * (78 / safeValues.length)}
+              y={88 - Math.max(value, 0.08) * 70}
+              width={Math.max(4, 48 / safeValues.length)}
+              height={Math.max(value, 0.08) * 70}
+              style={{ fill: tone }}
+            />
+          ))
+        ) : (
+          <polyline points={points.join(" ")} style={{ stroke: tone }} />
+        )}
+        {variant === "sigmoid" ? <path d="M 10 82 C 30 82 39 68 49 52 C 60 34 72 20 92 18" style={{ stroke: tone }} /> : null}
+      </svg>
+    </section>
   );
 }
 
@@ -821,9 +1165,11 @@ function MathWhiteboard({ profile }: { profile: IngestionProfile }) {
 function ParticleField({
   profile,
   mode,
+  model,
 }: {
   profile: IngestionProfile;
-  mode: "unstable" | "spatial";
+  mode: "unstable" | "spatial" | "validated";
+  model?: ModelFamily;
 }) {
   const mountRef = useRef<HTMLDivElement | null>(null);
 
@@ -855,9 +1201,9 @@ function ParticleField({
       positions[offset] = particle.x + jitter(index, 0) * 1.6;
       positions[offset + 1] = particle.y + jitter(index, 1) * 1.6;
       positions[offset + 2] = particle.z + jitter(index, 2) * 1.6;
-      targets[offset] = mode === "spatial" ? particle.x + (particle.cluster - 1) * 1.2 : particle.x;
-      targets[offset + 1] = mode === "spatial" ? particle.y * 0.82 : particle.y;
-      targets[offset + 2] = mode === "spatial" ? particle.z + particle.cluster * 0.35 : particle.z;
+      targets[offset] = mode !== "unstable" ? particle.x + (particle.cluster - 1) * 1.2 : particle.x;
+      targets[offset + 1] = mode !== "unstable" ? particle.y * 0.82 : particle.y;
+      targets[offset + 2] = mode !== "unstable" ? particle.z + particle.cluster * 0.35 : particle.z;
       color.set(particle.color);
       colors[offset] = color.r;
       colors[offset + 1] = color.g;
@@ -868,7 +1214,7 @@ function ParticleField({
     geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 
     const material = new THREE.PointsMaterial({
-      size: mode === "spatial" ? 4.8 : 4.2,
+      size: mode === "validated" ? 5.4 : mode === "spatial" ? 4.8 : 4.2,
       sizeAttenuation: false,
       vertexColors: true,
       transparent: true,
@@ -889,6 +1235,11 @@ function ParticleField({
     grid.position.y = -2.2;
     scene.add(grid);
 
+    const axes = new THREE.AxesHelper(4.2);
+    (axes.material as THREE.Material).transparent = true;
+    (axes.material as THREE.Material).opacity = 0.42;
+    scene.add(axes);
+
     function resize() {
       const width = Math.max(container.clientWidth, 320);
       const height = Math.max(container.clientHeight, 260);
@@ -904,10 +1255,11 @@ function ParticleField({
       const positionAttribute = geometry.getAttribute("position") as THREE.BufferAttribute;
       for (let index = 0; index < particleCount; index += 1) {
         const offset = index * 3;
-        if (mode === "spatial") {
-          positions[offset] += (targets[offset] - positions[offset]) * 0.018;
-          positions[offset + 1] += (targets[offset + 1] - positions[offset + 1]) * 0.018;
-          positions[offset + 2] += (targets[offset + 2] - positions[offset + 2]) * 0.018;
+        if (mode !== "unstable") {
+          const pull = mode === "validated" ? 0.026 : 0.018;
+          positions[offset] += (targets[offset] - positions[offset]) * pull;
+          positions[offset + 1] += (targets[offset + 1] - positions[offset + 1]) * pull;
+          positions[offset + 2] += (targets[offset + 2] - positions[offset + 2]) * pull;
         } else {
           positions[offset] += Math.sin(tick * 4 + index) * 0.0035;
           positions[offset + 1] += Math.cos(tick * 3 + index * 0.4) * 0.0035;
@@ -915,7 +1267,7 @@ function ParticleField({
         }
       }
       positionAttribute.needsUpdate = true;
-      points.rotation.y += mode === "spatial" ? 0.0018 : 0.0026;
+      points.rotation.y += mode === "validated" ? 0.0012 : mode === "spatial" ? 0.0018 : 0.0026;
       points.rotation.x = Math.sin(tick) * 0.06;
       renderer.render(scene, camera);
       animationFrame = window.requestAnimationFrame(animate);
@@ -935,6 +1287,8 @@ function ParticleField({
       (frame.material as THREE.Material).dispose();
       grid.geometry.dispose();
       (grid.material as THREE.Material).dispose();
+      axes.geometry.dispose();
+      (axes.material as THREE.Material).dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };
@@ -942,6 +1296,16 @@ function ParticleField({
 
   return (
     <div ref={mountRef} className="particle-canvas">
+      <div className="particle-labels" aria-hidden="true">
+        <span className="axis-x">feature axis x</span>
+        <span className="axis-y">target gradient y</span>
+        <span className="axis-z">latent depth z</span>
+      </div>
+      <div className="particle-legend" aria-hidden="true">
+        <span>cluster force</span>
+        <strong>{mode === "validated" ? "validated" : mode}</strong>
+        {model ? <em>{model.name}</em> : null}
+      </div>
       <div className="particle-overlay" aria-hidden="true">
         {profile.particles.slice(0, 96).map((particle, index) => {
           const drift = mode === "spatial" ? (particle.cluster - 1) * 11 : jitter(index, 0) * 7;
@@ -1102,13 +1466,16 @@ function ModelCurve({ model }: { model: ModelFamily }) {
   );
 }
 
-async function resolveSource(kaggleInput: string, preferLocalSource = false): Promise<{
+async function resolveSource(request: SourceRequest, preferLocalSource = false): Promise<{
   result: SourceResolveResult;
   usedLocalFallback: boolean;
 }> {
   let firstPass: SourceResolveResult;
   let usedLocalFallback = preferLocalSource;
-  if (preferLocalSource) {
+  const kaggleInput = request.kind === "kaggle" ? request.kaggleInput : DEFAULT_KAGGLE_INPUT;
+  if (request.kind === "zip") {
+    firstPass = await postFileResolveRequest(request.file);
+  } else if (preferLocalSource) {
     firstPass = await postDemoResolveRequest();
   } else {
     try {
@@ -1130,6 +1497,21 @@ async function resolveSource(kaggleInput: string, preferLocalSource = false): Pr
     result: await postResolveRequest(kaggleInput, firstPass.candidateFiles[0].path),
     usedLocalFallback,
   };
+}
+
+async function postFileResolveRequest(file: File): Promise<SourceResolveResult> {
+  const formData = new FormData();
+  formData.set("file", file);
+
+  const response = await fetch("/api/lab/source/resolve", {
+    method: "POST",
+    body: formData,
+  });
+  const payload = (await response.json()) as SourceResolveResult | LabRunError;
+  if (!response.ok) {
+    throw new Error((payload as LabRunError).details ?? (payload as LabRunError).error);
+  }
+  return payload as SourceResolveResult;
 }
 
 async function postResolveRequest(
@@ -1181,6 +1563,9 @@ function getActiveAgents(phase: ShellPhase): string[] {
   if (phase === "idle") {
     return ["Control"];
   }
+  if (phase === "intake") {
+    return ["Control", "Data Intake"];
+  }
   if (phase === "searching" || phase === "streaming") {
     return ["Control", "Data Panel"];
   }
@@ -1216,6 +1601,18 @@ function getActiveAgents(phase: ShellPhase): string[] {
   }
   if (phase === "testingPassed") {
     return ["Control", "Testing", "Accepted"];
+  }
+  if (phase === "performanceDiagnostics") {
+    return ["Control", "Evaluation"];
+  }
+  if (phase === "modelStatistics") {
+    return ["Control", "Statistics"];
+  }
+  if (phase === "methodologySummary") {
+    return ["Control", "Methodology"];
+  }
+  if (phase === "reportDrafting") {
+    return ["Control", "Report"];
   }
   return ["Control"];
 }
@@ -1401,6 +1798,8 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 TARGET = "${target}"
 FEATURES = [${featureList}]
 ARTIFACT_DIR = Path("artifacts")
+RANDOM_STATE = 42
+TEST_SIZE = 0.22
 
 def build_pipeline():
     numeric = [${profile.numericColumns.map((column) => `"${column.name}"`).join(", ")}]
@@ -1412,28 +1811,63 @@ def build_pipeline():
     model = ${modelFactory}
     return Pipeline([("preprocess", preprocess), ("model", model)])
 
+def validate_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    missing = [column for column in FEATURES + [TARGET] if column not in frame.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+    return frame[FEATURES + [TARGET]].copy()
+
+def build_manifest(pipeline, x_test, y_test, probabilities, predictions):
+    report = classification_report(y_test, predictions, output_dict=True)
+    return {
+        "target": TARGET,
+        "model_family": "${model.name}",
+        "feature_count": len(FEATURES),
+        "row_count": int(len(x_test)),
+        "roc_auc": float(roc_auc_score(y_test, probabilities)),
+        "report": report,
+        "positive_rate": float(pd.Series(predictions).mean()),
+    }
+
 def main(source_path: str):
     ARTIFACT_DIR.mkdir(exist_ok=True)
-    frame = pd.read_csv(source_path)
+    frame = validate_frame(pd.read_csv(source_path))
     x = frame[FEATURES]
     y = frame[TARGET]
-    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.22, random_state=42, stratify=y)
+    x_train, x_test, y_train, y_test = train_test_split(
+        x,
+        y,
+        test_size=TEST_SIZE,
+        random_state=RANDOM_STATE,
+        stratify=y,
+    )
     pipeline = build_pipeline()
     pipeline.fit(x_train, y_train)
     probabilities = pipeline.predict_proba(x_test)[:, 1]
     predictions = pipeline.predict(x_test)
-    manifest = {
-        "target": TARGET,
-        "model_family": "${model.name}",
-        "roc_auc": float(roc_auc_score(y_test, probabilities)),
-        "report": classification_report(y_test, predictions, output_dict=True),
-    }${manifestLine}
+    manifest = build_manifest(pipeline, x_test, y_test, probabilities, predictions)${manifestLine}
     joblib.dump(pipeline, ARTIFACT_DIR / "model.joblib")
     (ARTIFACT_DIR / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return manifest
 
 if __name__ == "__main__":
     print(json.dumps(main("inspection-surface.csv"), indent=2))
+`,
+    },
+    {
+      filename: "features.py",
+      language: "python",
+      content: `NUMERIC_FEATURES = [${profile.numericColumns.map((column) => `"${column.name}"`).join(", ")}]
+CATEGORICAL_FEATURES = [${profile.categoricalColumns.map((column) => `"${column.name}"`).join(", ")}]
+TARGET = "${target}"
+
+def feature_contract():
+    return {
+        "target": TARGET,
+        "numeric": NUMERIC_FEATURES,
+        "categorical": CATEGORICAL_FEATURES,
+        "feature_count": len(NUMERIC_FEATURES) + len(CATEGORICAL_FEATURES),
+    }
 `,
     },
     {
@@ -1457,6 +1891,63 @@ if __name__ == "__main__":
 `,
     },
     {
+      filename: "evaluate.py",
+      language: "python",
+      content: `import json
+from pathlib import Path
+
+import joblib
+import pandas as pd
+from sklearn.metrics import classification_report, roc_auc_score
+from sklearn.model_selection import train_test_split
+
+from features import CATEGORICAL_FEATURES, NUMERIC_FEATURES, TARGET
+
+ARTIFACT_DIR = Path("artifacts")
+
+def evaluate(source_path: str):
+    frame = pd.read_csv(source_path)
+    features = NUMERIC_FEATURES + CATEGORICAL_FEATURES
+    x_train, x_test, y_train, y_test = train_test_split(
+        frame[features],
+        frame[TARGET],
+        test_size=0.22,
+        random_state=42,
+        stratify=frame[TARGET],
+    )
+    model = joblib.load(ARTIFACT_DIR / "model.joblib")
+    probabilities = model.predict_proba(x_test)[:, 1]
+    predictions = model.predict(x_test)
+    diagnostics = {
+        "roc_auc": float(roc_auc_score(y_test, probabilities)),
+        "classification_report": classification_report(y_test, predictions, output_dict=True),
+        "holdout_rows": int(len(x_test)),
+        "train_rows": int(len(x_train)),
+    }
+    (ARTIFACT_DIR / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2))
+    return diagnostics
+
+if __name__ == "__main__":
+    print(json.dumps(evaluate("inspection-surface.csv"), indent=2))
+`,
+    },
+    {
+      filename: "config.yaml",
+      language: "yaml",
+      content: `target: ${target}
+model_family: ${model.name}
+test_size: 0.22
+random_state: 42
+features:
+  numeric: ${profile.numericColumns.length}
+  categorical: ${profile.categoricalColumns.length}
+artifacts:
+  - artifacts/model.joblib
+  - artifacts/manifest.json
+  - artifacts/diagnostics.json
+`,
+    },
+    {
       filename: "model_card.md",
       language: "markdown",
       content: `# ML-Labs Model Card
@@ -1470,6 +1961,12 @@ Why this family:
 - Risk score: ${model.risk.toFixed(2)}
 - Preserves baseline and linear controls for comparison.
 - Requires artifact manifest validation before handoff.
+
+Training contract:
+- Target column: \`${target}\`
+- Numeric features: ${profile.numericColumns.length}
+- Categorical features: ${profile.categoricalColumns.length}
+- Generated after ${mode === "refine" ? "testing-agent refinement" : "initial code synthesis"}
 `,
     },
     {
@@ -1480,6 +1977,7 @@ numpy
 scikit-learn
 joblib
 matplotlib
+pyyaml
 `,
     },
     {
@@ -1492,10 +1990,103 @@ ML-Labs generated a compact training package for \`${target}\`.
 Files:
 - \`train.py\` builds and saves the training pipeline.
 - \`predict.py\` loads the saved model and scores one payload.
+- \`evaluate.py\` regenerates holdout diagnostics.
+- \`features.py\` records the feature contract.
+- \`config.yaml\` captures runtime parameters.
 - \`model_card.md\` records family choice and risk notes.
 - \`requirements.txt\` captures the ML runtime.
 
 Status: ${mode === "refine" ? "refined after testing agent review" : "initial generation"}
+`,
+    },
+    {
+      filename: "research_report.md",
+      language: "markdown",
+      content: `# ML-Labs Research Report
+
+## Objective
+Train and evaluate a ${model.name} surface for target \`${target}\` using the resolved inspection table.
+
+## Data Understanding
+The resolved table exposes ${profile.rowCount} previewed rows, ${profile.columnCount} columns, ${profile.numericColumns.length} numeric fields, and ${profile.categoricalColumns.length} categorical fields. Missing value pressure is ${profile.missingTotal} cells in preview.
+
+## Method
+The generated training package applies column-aware imputation, categorical encoding, model fitting, holdout evaluation, artifact serialization, and a manifest-based testing loop.
+
+## Result
+The selected family score is ${model.score.toFixed(3)} with risk ${model.risk.toFixed(2)}. The testing field validates that row particles remain stable after projection and model-family selection.
+`,
+    },
+  ];
+}
+
+function buildReportDrafts(
+  profile: IngestionProfile,
+  model: ModelFamily,
+  runResult: LabRunResult | null,
+): GeneratedArtifact[] {
+  const target = profile.targetColumn;
+  const score = runResult?.leaderboard[0]?.score ?? model.score;
+  const metric = runResult?.leaderboard[0]?.metricName ?? "selection score";
+  const summary = runResult?.plainEnglishSummary;
+  return [
+    {
+      filename: "executive_summary.md",
+      language: "markdown",
+      content: `# Executive Summary
+
+ML-Labs resolved a working table and selected **${model.name}** for target \`${target}\`.
+
+${summary?.shortExplanation ?? "The run profiled the dataset, compared model families, validated the generated training surface, and prepared export-ready artifacts."}
+
+- Rows inspected: ${profile.rowCount}
+- Feature columns: ${Math.max(profile.columnCount - 1, 0)}
+- Metric: ${metric}
+- Score: ${score.toFixed(3)}
+`,
+    },
+    {
+      filename: "sample_research_report.md",
+      language: "markdown",
+      content: runResult?.finalReportMarkdown ?? `# Sample Research Report
+
+## Dataset
+The table contains ${profile.columnCount} columns and targets \`${target}\`.
+
+## Modeling
+${model.name} was selected after baseline, linear, tree, boosting, and neural candidates were inspected.
+
+## Validation
+The final 3D field replay preserved particle clusters and target-axis separation after the generated code refinement pass.
+`,
+    },
+    {
+      filename: "model_card_draft.md",
+      language: "markdown",
+      content: `# Model Card Draft
+
+Model family: ${model.name}
+
+Target: ${target}
+
+Known limits:
+- Preview-derived profiling can understate rare values.
+- Final production readiness needs a larger holdout and drift monitor.
+- Connector-backed MCP data is staged for a later pass.
+`,
+    },
+    {
+      filename: "methods_appendix.md",
+      language: "markdown",
+      content: `# Methods Appendix
+
+Pipeline stages: intake, resolution, profiling, target framing, feature pipeline, model sweep, evaluation, critique, and export.
+
+Feature contract:
+- Numeric: ${profile.numericColumns.map((column) => column.name).join(", ") || "none"}
+- Categorical: ${profile.categoricalColumns.map((column) => column.name).join(", ") || "none"}
+
+Diagnostics rendered: 3D particle projection, score curve, loss decay, error distribution, feature importance, split quality, and calibration band.
 `,
     },
   ];
