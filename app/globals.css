@@ -755,6 +755,72 @@ a {
   border-color: rgba(216, 111, 111, 0.36);
 }
 
+.error-hint {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(216, 111, 111, 0.28);
+  background: rgba(216, 111, 111, 0.06);
+  display: grid;
+  gap: 8px;
+}
+
+.error-hint strong {
+  color: var(--ide-text);
+  font-size: 0.86rem;
+  font-weight: 640;
+}
+
+.error-hint p {
+  margin: 0;
+  color: var(--ide-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.error-hint code {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.error-hint pre {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(8, 10, 12, 0.85);
+  border: 1px solid var(--ide-line);
+  color: var(--ide-text);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.error-actions {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+}
+
+.error-actions button {
+  border: 1px solid var(--ide-line-strong);
+  border-radius: 6px;
+  padding: 9px 14px;
+  background: rgba(143, 183, 255, 0.12);
+  color: var(--ide-text);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.error-actions button:hover {
+  border-color: rgba(143, 183, 255, 0.56);
+  background: rgba(143, 183, 255, 0.2);
+}
+
 .model-map-grid {
   min-height: 0;
   overflow: auto;

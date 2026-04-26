@@ -153,6 +153,23 @@ export function MlLabsWorkbench() {
     setActivePrompt(nextPrompt);
   }
 
+  function handleReturnToIntake() {
+    clearTimers(timers.current);
+    setSourceResolution(null);
+    setRunResult(null);
+    setSelectedTarget("");
+    setErrorMessage(null);
+    setPhase("intake");
+    setMessages((current) => [
+      ...current,
+      {
+        id: `control-reset-${Date.now()}`,
+        speaker: "control",
+        text: "Returning to the source picker. Choose another dataset to retry.",
+      },
+    ]);
+  }
+
   async function startSourceResolution(request: SourceRequest) {
     const hasKaggleReference =
       request.kind === "kaggle" ? hasExplicitKaggleReference(request.kaggleInput) : false;
@@ -396,7 +413,19 @@ export function MlLabsWorkbench() {
           {phase === "reportDrafting" && profile ? (
             <ReportDraftingPanel profile={profile} models={modelFamilies} runResult={runResult} />
           ) : null}
-          {phase === "error" ? <ErrorPanel message={errorMessage ?? "Unknown inspection error."} /> : null}
+          {phase === "error" ? (
+            <ErrorPanel
+              message={errorMessage ?? "Unknown inspection error."}
+              onRetry={handleReturnToIntake}
+            />
+          ) : null}
+          {phase === "error" ? (
+            <DataIntakePanel
+              prompt={activePrompt}
+              onPromptChange={handleBriefChange}
+              onResolve={(request) => void startSourceResolution(request)}
+            />
+          ) : null}
         </div>
       </section>
     </main>
@@ -1528,12 +1557,43 @@ function DiagnosticGraph({
   );
 }
 
-function ErrorPanel({ message }: { message: string }) {
+function ErrorPanel({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry?: () => void;
+}) {
+  const isPythonMissing = /ModuleNotFoundError|No module named|Python runner failed/i.test(message);
   return (
     <article className="agent-panel compact-panel error-panel">
       <span className="panel-kicker">Control</span>
       <h1>Inspection stopped.</h1>
       <p>{message}</p>
+      {isPythonMissing ? (
+        <div className="error-hint">
+          <strong>The local Python backend is missing dependencies.</strong>
+          <p>
+            From the project root, run the following once to install the runner stack, then refresh
+            this page:
+          </p>
+          <pre>
+{`python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt joblib`}
+          </pre>
+          <p>
+            ML-Labs also reads <code>ML_LABS_PYTHON</code> if you prefer to point at an existing
+            interpreter that already has <code>scikit-learn</code> and <code>joblib</code>.
+          </p>
+        </div>
+      ) : null}
+      {onRetry ? (
+        <div className="error-actions">
+          <button type="button" onClick={onRetry}>
+            Pick another source
+          </button>
+        </div>
+      ) : null}
     </article>
   );
 }
