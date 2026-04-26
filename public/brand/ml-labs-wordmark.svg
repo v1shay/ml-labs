@@ -1,0 +1,9 @@
+<svg width="1000" height="260" viewBox="0 0 1000 260" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1000" height="260" rx="72" fill="#050505"/>
+  <text x="500" y="166" text-anchor="middle" fill="#e2e2e2" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="104" font-weight="800" letter-spacing="-3">
+    ML-Labs
+  </text>
+  <text x="500" y="166" text-anchor="middle" fill="none" stroke="#777" stroke-width="2" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="104" font-weight="800" letter-spacing="-3">
+    ML-Labs
+  </text>
+</svg>
