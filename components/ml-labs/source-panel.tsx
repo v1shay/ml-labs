@@ -159,7 +159,7 @@ export function SourcePanel({
 
         <div className="source-metadata">
           <span className="source-metadata-label">Current source</span>
-          <strong>{preview?.filename ?? kaggleReference || "waiting for input"}</strong>
+          <strong>{preview?.filename ?? (kaggleReference || "waiting for input")}</strong>
           <p>
             {preview
               ? `${preview.headers.length} headers detected · ${preview.rows.length} preview rows loaded`
