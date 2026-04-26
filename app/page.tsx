@@ -3,6 +3,7 @@
 import {
   Bot,
   Braces,
+  CirclePlay,
   Database,
   FileText,
   Loader2,
@@ -97,7 +98,28 @@ const starterMessages: ChatMessage[] = [
   },
 ];
 
-const pendingStages = ["reading csv", "parsing rows", "profiling schema", "normalizing columns"];
+const pendingStages = [
+  "analyzing ...",
+  "parsing dataset ...",
+  "profiling schema ...",
+  "replaying LabRunResult ...",
+];
+
+const labRunContractLines = [
+  "{",
+  '  "runId": "demo-classification-churn-001",',
+  '  "scenario": "classification",',
+  '  "datasetProfile": { "problemType": "classification", "...": "..." },',
+  '  "agentTrace": [ "...stages..." ],',
+  '  "leaderboard": [ "...models..." ],',
+  '  "bestModel": { "...": "..." },',
+  '  "criticReport": { "...": "..." },',
+  '  "visualizations": [ "...charts..." ],',
+  '  "predictionInputSchema": { "...fields for Try Here..." },',
+  '  "artifacts": [ "train.py", "evaluate.py", "predict.py", "report.md" ],',
+  '  "finalReportMarkdown": "..."',
+  "}",
+];
 
 export default function HomePage() {
   const [messages, setMessages] = useState<ChatMessage[]>(starterMessages);
@@ -121,6 +143,7 @@ export default function HomePage() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const streamTimerRef = useRef<number | null>(null);
+  const schemaTimerRef = useRef<number | null>(null);
   const stageTimerRef = useRef<number | null>(null);
 
   const visibleMessages = useMemo(
@@ -206,6 +229,7 @@ export default function HomePage() {
     setUploadError(null);
     setUploadResult(null);
     startStageLoop();
+    startSchemaReplay();
     appendAssistantMessage(`Data Intake Agent: ingesting ${selectedFile.name}`);
 
     try {
@@ -223,13 +247,11 @@ export default function HomePage() {
       setUploadResult(normalized);
       setUploadStatus("complete");
       stopStageLoop();
+      stopSchemaReplay();
       appendTraceMessages(normalized.trace);
       setStreamLines((current) => [
         ...current.slice(-28),
-        `runId: ${normalized.runId}`,
-        `profile: ${normalized.rows ?? "?"} rows x ${normalized.columns ?? "?"} columns`,
-        `bestModel: ${normalized.bestModel}`,
-        "status: backend trace complete",
+        ...createResultSchemaLines(normalized),
       ]);
     } catch (caughtError) {
       const message =
@@ -237,6 +259,7 @@ export default function HomePage() {
       setUploadError(message);
       setUploadStatus("failed");
       stopStageLoop();
+      stopSchemaReplay();
       appendAssistantMessage(`Run blocked: ${message}`);
     }
   }
@@ -259,6 +282,7 @@ export default function HomePage() {
 
   async function acceptFile(file: File | null) {
     clearStreamTimer();
+    stopSchemaReplay();
     setSelectedFile(file);
     setUploadResult(null);
     setUploadError(null);
@@ -284,8 +308,21 @@ export default function HomePage() {
       `bytes: ${file.size}`,
       "preview:",
       ...rows,
+      "$ inferred input contract",
+      ...labRunContractLines,
       "$ ready for target column",
     ]);
+  }
+
+  async function loadDemoCsv() {
+    const response = await fetch("/data/demo-insurance.csv");
+    const csv = await response.text();
+    const file = new File([csv], "demo-insurance.csv", { type: "text/csv" });
+    setTargetColumn((current) => current || "charges");
+    setIntentPrompt(
+      (current) => current || "Create a model to predict insurance charges from the CSV dataset.",
+    );
+    await acceptFile(file);
   }
 
   function showKagglePending() {
@@ -343,6 +380,12 @@ export default function HomePage() {
 
     let index = 0;
     streamTimerRef.current = window.setInterval(() => {
+      if (index >= lines.length) {
+        clearStreamTimer();
+        setUploadStatus("idle");
+        return;
+      }
+
       setStreamLines((current) => [...current.slice(-34), lines[index]]);
       index += 1;
 
@@ -351,6 +394,24 @@ export default function HomePage() {
         setUploadStatus("idle");
       }
     }, 55);
+  }
+
+  function startSchemaReplay() {
+    stopSchemaReplay();
+    setStreamLines((current) => [
+      ...current.slice(-18),
+      "$ analyzing ...",
+      "schema: LabRunResult",
+    ]);
+
+    let index = 0;
+    schemaTimerRef.current = window.setInterval(() => {
+      setStreamLines((current) => [
+        ...current.slice(-36),
+        labRunContractLines[index % labRunContractLines.length],
+      ]);
+      index += 1;
+    }, 90);
   }
 
   function startStageLoop() {
@@ -365,6 +426,13 @@ export default function HomePage() {
     if (streamTimerRef.current !== null) {
       window.clearInterval(streamTimerRef.current);
       streamTimerRef.current = null;
+    }
+  }
+
+  function stopSchemaReplay() {
+    if (schemaTimerRef.current !== null) {
+      window.clearInterval(schemaTimerRef.current);
+      schemaTimerRef.current = null;
     }
   }
 
@@ -480,6 +548,11 @@ export default function HomePage() {
               <span>{selectedFile ? selectedFile.name : "select or drop csv"}</span>
             </button>
 
+            <button className="secondary-action full-action" type="button" onClick={loadDemoCsv}>
+              <CirclePlay size={14} />
+              load demo csv
+            </button>
+
             <label className="field">
               <span>kaggle slug</span>
               <input
@@ -538,7 +611,7 @@ export default function HomePage() {
               <i />
             </div>
             <pre aria-label="CSV ingestion stream">
-              {streamLines.map((line, index) => (
+              {streamLines.filter(Boolean).map((line, index) => (
                 <code key={`${line}-${index}`}>{line}</code>
               ))}
             </pre>
@@ -582,6 +655,28 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </span>
   );
+}
+
+function createResultSchemaLines(result: NormalizedRun) {
+  const score = result.score === null ? "null" : result.score.toFixed(3);
+
+  return [
+    "{",
+    `  "runId": "${result.runId}",`,
+    `  "scenario": "${result.scenario}",`,
+    `  "datasetProfile": { "rows": ${result.rows ?? "null"}, "columns": ${
+      result.columns ?? "null"
+    }, "targetColumn": "${result.targetColumn}", "problemType": "${result.problemType}" },`,
+    `  "agentTrace": [ ${result.trace.length} stages ],`,
+    `  "leaderboard": [ "...models..." ],`,
+    `  "bestModel": { "modelName": "${result.bestModel}", "metricName": "${result.metric}", "score": ${score} },`,
+    `  "visualizations": [ ${result.visualizations} charts ],`,
+    `  "predictionInputSchema": { "fields": ${result.schemaFields} },`,
+    `  "artifacts": [ ${result.artifacts} files ],`,
+    '  "finalReportMarkdown": "..."',
+    "}",
+    "status: backend trace complete",
+  ];
 }
 
 function normalizeLabRunResult(result: LabRunResponse, fallbackTarget: string): NormalizedRun {
