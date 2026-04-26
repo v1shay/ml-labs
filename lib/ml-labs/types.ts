@@ -1,10 +1,19 @@
 export type ProblemType = "classification" | "regression";
 export type AgentStatus = "queued" | "running" | "complete" | "warning" | "failed";
 export type VisualizationType =
+  | "actual_vs_predicted"
+  | "class_balance"
+  | "correlation_heatmap"
   | "feature_importance"
   | "confusion_matrix"
+  | "experiment_graph"
+  | "missingness_summary"
+  | "model_comparison"
+  | "pr_curve"
   | "residual_plot"
-  | "experiment_graph";
+  | "roc_curve";
+
+export type PredictionInputKind = "boolean" | "number" | "string";
 
 export type DatasetProfile = {
   rows: number;
@@ -19,6 +28,7 @@ export type DatasetProfile = {
 
 export type AgentTraceItem = {
   agent: string;
+  stageId: string;
   status: AgentStatus;
   message: string;
 };
@@ -52,6 +62,8 @@ export type CriticReport = {
 };
 
 export type Visualization = {
+  id: string;
+  stageId?: string;
   type: VisualizationType;
   title: string;
   data: unknown;
@@ -68,12 +80,14 @@ export type LabArtifact = {
 
 export type LabRunResult = {
   runId: string;
+  scenario?: ProblemType;
   datasetProfile: DatasetProfile;
   agentTrace: AgentTraceItem[];
   leaderboard: LeaderboardEntry[];
   bestModel: BestModelSummary;
   criticReport: CriticReport;
   visualizations: Visualization[];
+  predictionInputSchema?: PredictionInputSchema;
   artifacts: LabArtifact[];
   finalReportMarkdown: string;
 };
@@ -83,18 +97,33 @@ export type LabRunError = {
   details?: string;
 };
 
-export type DemoPredictInput = {
-  age: number;
-  sex: "female" | "male";
-  bmi: number;
-  children: number;
-  smoker: boolean;
-  region: "northeast" | "northwest" | "southeast" | "southwest";
+export type PredictionInputField = {
+  name: string;
+  label: string;
+  kind: PredictionInputKind;
+  required: boolean;
+  options?: string[];
+  example?: boolean | number | string;
+  description?: string;
 };
 
-export type DemoPredictResponse = {
-  prediction: number;
-  unit: string;
+export type PredictionInputSchema = {
+  targetColumn: string;
+  problemType: ProblemType;
+  fields: PredictionInputField[];
+};
+
+export type LabPredictionRequest = {
+  runId: string;
+  input: Record<string, unknown>;
+};
+
+export type LabPredictionResponse = {
+  runId: string;
+  problemType: ProblemType;
+  prediction: boolean | number | string;
+  probability?: number;
+  unit?: string;
   explanation: string;
   topFactors: string[];
 };
@@ -104,10 +133,12 @@ export type PythonRunnerResult = {
   leaderboard: LeaderboardEntry[];
   criticReport: CriticReport;
   visualizations: Visualization[];
+  predictionInputSchema: PredictionInputSchema;
   metadata?: {
     targetMean?: number | null;
     targetStd?: number | null;
     modelFailures?: string[];
     intentPrompt?: string;
+    trainingNote?: string | null;
   };
 };

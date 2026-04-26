@@ -1,51 +1,75 @@
 import { NextResponse } from "next/server";
-import { demoPredictionExamples, predictDemoInsuranceCharge } from "@/lib/ml-labs/demo-predictor";
-import type { DemoPredictInput } from "@/lib/ml-labs/types";
+import { predictDemoRun } from "@/lib/ml-labs/demo-predictor";
+import { getDemoLabRunResult, isDemoRunId } from "@/lib/ml-labs/demo-result";
+import {
+  predictLabRun,
+  RuntimeBundleExpiredError,
+  RuntimeBundleMissingError,
+} from "@/lib/ml-labs/lab-runner";
+import type { LabPredictionRequest, LabRunError } from "@/lib/ml-labs/types";
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as Partial<DemoPredictInput>;
-    const input = validatePredictInput(body);
-    return NextResponse.json(predictDemoInsuranceCharge(input));
+    const body = (await request.json()) as Partial<LabPredictionRequest>;
+    if (typeof body.runId !== "string" || body.runId.trim().length === 0) {
+      return NextResponse.json<LabRunError>(
+        {
+          error: "A non-empty `runId` field is required.",
+        },
+        { status: 400 },
+      );
+    }
+
+    if (!body.input || typeof body.input !== "object" || Array.isArray(body.input)) {
+      return NextResponse.json<LabRunError>(
+        {
+          error: "A JSON object is required under the `input` field.",
+        },
+        { status: 400 },
+      );
+    }
+
+    if (isDemoRunId(body.runId)) {
+      return NextResponse.json(predictDemoRun(body.runId, body.input as Record<string, unknown>));
+    }
+
+    const prediction = await predictLabRun({
+      runId: body.runId,
+      input: body.input as Record<string, unknown>,
+    });
+
+    return NextResponse.json(prediction);
   } catch (error) {
+    if (error instanceof RuntimeBundleMissingError) {
+      return NextResponse.json<LabRunError>(
+        {
+          error: "Unknown run ID.",
+          details: error.message,
+        },
+        { status: 404 },
+      );
+    }
+
+    if (error instanceof RuntimeBundleExpiredError) {
+      return NextResponse.json<LabRunError>(
+        {
+          error: "Run expired.",
+          details: error.message,
+        },
+        { status: 410 },
+      );
+    }
+
     const details = error instanceof Error ? error.message : "Unknown error";
+    const demoSchema = getDemoLabRunResult("classification").predictionInputSchema;
+
     return NextResponse.json(
       {
-        error: "Invalid demo prediction payload.",
+        error: "Prediction request failed.",
         details,
-        examples: demoPredictionExamples,
+        predictionInputSchema: demoSchema,
       },
       { status: 400 },
     );
   }
 }
-
-function validatePredictInput(body: Partial<DemoPredictInput>): DemoPredictInput {
-  const regions = new Set(["northeast", "northwest", "southeast", "southwest"]);
-  const sexes = new Set(["female", "male"]);
-
-  if (
-    typeof body.age !== "number" ||
-    typeof body.bmi !== "number" ||
-    typeof body.children !== "number" ||
-    typeof body.smoker !== "boolean" ||
-    typeof body.sex !== "string" ||
-    typeof body.region !== "string"
-  ) {
-    throw new Error("Expected age, sex, bmi, children, smoker, and region fields.");
-  }
-
-  if (!sexes.has(body.sex) || !regions.has(body.region)) {
-    throw new Error("Sex or region value is outside the supported demo domain.");
-  }
-
-  return {
-    age: body.age,
-    sex: body.sex as DemoPredictInput["sex"],
-    bmi: body.bmi,
-    children: body.children,
-    smoker: body.smoker,
-    region: body.region as DemoPredictInput["region"],
-  };
-}
-

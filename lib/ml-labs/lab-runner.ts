@@ -1,21 +1,36 @@
 import { promises as fs } from "node:fs";
+import { existsSync } from "node:fs";
+import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
 import { buildCompleteRun } from "@/lib/ml-labs/report-generator";
+import {
+  prepareRuntimeBundle,
+  removeRuntimeBundle,
+  resolveRuntimeBundle,
+  RuntimeBundleExpiredError,
+  RuntimeBundleMissingError,
+} from "@/lib/ml-labs/runtime-store";
 import type {
   AgentTraceItem,
   CriticReport,
   DatasetProfile,
+  LabPredictionResponse,
   LabRunResult,
   LeaderboardEntry,
+  ProblemType,
   PythonRunnerResult,
   Visualization,
 } from "@/lib/ml-labs/types";
 
 const execFileAsync = promisify(execFile);
+
+type BuildRunOptions = {
+  runId: string;
+  scenario?: ProblemType;
+  intentPrompt?: string;
+};
 
 export async function runLab({
   file,
@@ -34,58 +49,50 @@ export async function runLab({
     throw new Error("Only CSV uploads are supported in this MVP.");
   }
 
+  const runId = buildRunId(targetColumn);
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ml-labs-"));
   const tempFilePath = path.join(tempDir, sanitizeFilename(file.name));
+  const bundleDir = await prepareRuntimeBundle(runId);
 
   try {
     const fileBuffer = Buffer.from(await file.arrayBuffer());
     await fs.writeFile(tempFilePath, fileBuffer);
 
-    const runnerResult = await executePythonRunner(tempFilePath, targetColumn, intentPrompt);
-    return normalizeRunnerResult(runnerResult, intentPrompt);
+    const runnerResult = await executePythonTrain({
+      bundleDir,
+      csvPath: tempFilePath,
+      intentPrompt,
+      runId,
+      targetColumn,
+    });
+
+    return buildLabRunFromRunnerResult(runnerResult, {
+      runId,
+      scenario: runnerResult.datasetProfile.problemType,
+      intentPrompt,
+    });
+  } catch (error) {
+    await removeRuntimeBundle(runId);
+    throw error;
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 }
 
-async function executePythonRunner(
-  csvPath: string,
-  targetColumn: string,
-  intentPrompt?: string,
-): Promise<PythonRunnerResult> {
-  const projectRoot = process.cwd();
-  const pythonExecutable = process.env.ML_LABS_PYTHON || preferredPythonBinary(projectRoot);
-  const scriptPath = path.join(projectRoot, "scripts", "ml_labs_runner.py");
-
-  const args = [scriptPath, "--csv", csvPath, "--target", targetColumn];
-  if (intentPrompt) {
-    args.push("--intent", intentPrompt);
-  }
-
-  try {
-    const { stdout } = await execFileAsync(pythonExecutable, args, {
-      cwd: projectRoot,
-      env: process.env,
-      maxBuffer: 10 * 1024 * 1024,
-    });
-
-    return JSON.parse(stdout) as PythonRunnerResult;
-  } catch (error) {
-    const stderr =
-      typeof error === "object" && error !== null && "stderr" in error
-        ? String(error.stderr ?? "")
-        : "";
-    const cleanedStderr = extractPythonFailure(stderr);
-    const message =
-      cleanedStderr ||
-      (error instanceof Error ? error.message : "The Python experiment engine failed unexpectedly.");
-    throw new Error(`ML-Labs Python runner failed: ${message}`);
-  }
+export async function predictLabRun({
+  input,
+  runId,
+}: {
+  input: Record<string, unknown>;
+  runId: string;
+}): Promise<LabPredictionResponse> {
+  const bundleDir = await resolveRuntimeBundle(runId);
+  return executePythonPredict({ bundleDir, input, runId });
 }
 
-function normalizeRunnerResult(
+export function buildLabRunFromRunnerResult(
   runnerResult: PythonRunnerResult,
-  intentPrompt?: string,
+  options: BuildRunOptions,
 ): LabRunResult {
   const leaderboard = normalizeLeaderboard(runnerResult.leaderboard);
   const agentTrace = buildAgentTrace(
@@ -97,17 +104,101 @@ function normalizeRunnerResult(
 
   return buildCompleteRun(
     {
-      runId: buildRunId(runnerResult.datasetProfile.targetColumn),
-      intentPrompt,
+      runId: options.runId,
+      scenario: options.scenario ?? runnerResult.datasetProfile.problemType,
+      intentPrompt: options.intentPrompt,
       datasetProfile: runnerResult.datasetProfile,
       leaderboard,
       criticReport: runnerResult.criticReport,
+      predictionInputSchema: runnerResult.predictionInputSchema,
     },
     {
       agentTrace,
       visualizations: normalizeVisualizations(runnerResult.visualizations),
     },
   );
+}
+
+export { RuntimeBundleExpiredError, RuntimeBundleMissingError };
+
+async function executePythonTrain({
+  bundleDir,
+  csvPath,
+  intentPrompt,
+  runId,
+  targetColumn,
+}: {
+  bundleDir: string;
+  csvPath: string;
+  intentPrompt?: string;
+  runId: string;
+  targetColumn: string;
+}): Promise<PythonRunnerResult> {
+  const args = [
+    "train",
+    "--csv",
+    csvPath,
+    "--target",
+    targetColumn,
+    "--run-id",
+    runId,
+    "--bundle-dir",
+    bundleDir,
+  ];
+
+  if (intentPrompt) {
+    args.push("--intent", intentPrompt);
+  }
+
+  return executePythonCommand<PythonRunnerResult>(args);
+}
+
+async function executePythonPredict({
+  bundleDir,
+  input,
+  runId,
+}: {
+  bundleDir: string;
+  input: Record<string, unknown>;
+  runId: string;
+}): Promise<LabPredictionResponse> {
+  const response = await executePythonCommand<LabPredictionResponse>([
+    "predict",
+    "--bundle-dir",
+    bundleDir,
+    "--run-id",
+    runId,
+    "--input-json",
+    JSON.stringify(input),
+  ]);
+
+  return response;
+}
+
+async function executePythonCommand<T>(args: string[]): Promise<T> {
+  const projectRoot = process.cwd();
+  const pythonExecutable = process.env.ML_LABS_PYTHON || preferredPythonBinary(projectRoot);
+  const scriptPath = path.join(projectRoot, "scripts", "ml_labs_runner.py");
+
+  try {
+    const { stdout } = await execFileAsync(pythonExecutable, [scriptPath, ...args], {
+      cwd: projectRoot,
+      env: process.env,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+
+    return JSON.parse(stdout) as T;
+  } catch (error) {
+    const stderr =
+      typeof error === "object" && error !== null && "stderr" in error
+        ? String(error.stderr ?? "")
+        : "";
+    const cleanedStderr = extractPythonFailure(stderr);
+    const message =
+      cleanedStderr ||
+      (error instanceof Error ? error.message : "The Python experiment engine failed unexpectedly.");
+    throw new Error(`ML-Labs Python runner failed: ${message}`);
+  }
 }
 
 function normalizeLeaderboard(entries: LeaderboardEntry[]): LeaderboardEntry[] {
@@ -136,36 +227,40 @@ function buildAgentTrace(
   const trace: AgentTraceItem[] = [
     {
       agent: "Data Intake Agent",
+      stageId: "intake",
       status: "complete",
       message: `Ingested ${datasetProfile.rows} rows across ${datasetProfile.columns} columns from the uploaded CSV.`,
     },
     {
       agent: "Schema Validation Agent",
+      stageId: "schema-validation",
       status: "complete",
       message: `Validated target column "${datasetProfile.targetColumn}" and inferred ${datasetProfile.problemType} behavior.`,
     },
     {
       agent: "Data Profiling Agent",
+      stageId: "profiling",
       status: "complete",
       message: `Separated ${datasetProfile.numericColumns.length} numeric and ${datasetProfile.categoricalColumns.length} categorical features.`,
     },
     {
-      agent: "Missing Value Audit Agent",
-      status: warningStatus,
-      message:
-        criticReport.warnings[0] ??
-        "No major missing-value concerns were discovered in the primary training path.",
+      agent: "Problem Framing Agent",
+      stageId: "framing",
+      status: "complete",
+      message: `Selected ${metricDescription(datasetProfile.problemType)} as the primary evaluation frame for the lab run.`,
     },
     {
       agent: "Feature Planning Agent",
+      stageId: "preprocessing",
       status: "complete",
       message:
-        "Prepared a preprocessing graph with numeric median imputation and categorical one-hot encoding.",
+        "Prepared numeric median imputation and categorical one-hot encoding inside a consistent train-test pipeline.",
     },
     {
       agent: "Baseline Agent",
+      stageId: "baseline",
       status: "complete",
-      message: `Benchmarked the baseline before training the model family sweep.`,
+      message: "Benchmarked the baseline before the broader model family sweep.",
     },
   ];
 
@@ -174,6 +269,7 @@ function buildAgentTrace(
     .forEach((entry) => {
       trace.push({
         agent: `${entry.family} Agent`,
+        stageId: familyToStageId(entry.family),
         status: "complete",
         message: `${entry.modelName} finished with ${entry.metricName} ${entry.score.toFixed(3)} on held-out data.`,
       });
@@ -182,6 +278,7 @@ function buildAgentTrace(
   modelFailures.forEach((failure) => {
     trace.push({
       agent: "Fallback Modeling Agent",
+      stageId: "fallback",
       status: "warning",
       message: failure,
     });
@@ -190,11 +287,13 @@ function buildAgentTrace(
   trace.push(
     {
       agent: "Evaluation Agent",
+      stageId: "evaluation",
       status: "complete",
-      message: `${bestModel.modelName} won the leaderboard and now anchors the final summary.`,
+      message: `${bestModel.modelName} won the leaderboard and anchors the final summary.`,
     },
     {
       agent: "Critic Agent",
+      stageId: "critic",
       status: warningStatus,
       message:
         criticReport.nextExperiments[0] ??
@@ -202,8 +301,9 @@ function buildAgentTrace(
     },
     {
       agent: "Report Agent",
+      stageId: "packaging",
       status: "complete",
-      message: "Generated report markdown plus reusable code artifacts for export.",
+      message: "Generated report markdown plus runnable code artifacts for export.",
     },
   );
 
@@ -211,8 +311,9 @@ function buildAgentTrace(
 }
 
 function normalizeVisualizations(visualizations: Visualization[]): Visualization[] {
-  return visualizations.map((visualization) => ({
+  return visualizations.map((visualization, index) => ({
     ...visualization,
+    id: visualization.id || `viz-${index + 1}`,
     data: visualization.data,
   }));
 }
@@ -234,6 +335,29 @@ function round(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
+function familyToStageId(family: string): string {
+  const normalized = family.toLowerCase();
+  if (normalized.includes("linear")) {
+    return "linear-model";
+  }
+
+  if (normalized.includes("boost")) {
+    return "boosted-trees";
+  }
+
+  if (normalized.includes("tree") || normalized.includes("forest")) {
+    return "tree-model";
+  }
+
+  return "modeling";
+}
+
+function metricDescription(problemType: ProblemType): string {
+  return problemType === "classification"
+    ? "classification accuracy and ranking diagnostics"
+    : "regression fit and residual diagnostics";
+}
+
 function extractPythonFailure(stderr: string): string {
   const normalized = stderr.trim();
   if (!normalized) {
@@ -247,7 +371,7 @@ function extractPythonFailure(stderr: string): string {
 
   const labeledLine = [...lines]
     .reverse()
-    .find((line) => line.startsWith("ValueError:") || line.startsWith("RuntimeError:"));
+    .find((line) => /^(Key|Runtime|Type|Value)Error:/.test(line));
 
   if (labeledLine) {
     return labeledLine.replace(/^[A-Za-z]+Error:\s*/, "");

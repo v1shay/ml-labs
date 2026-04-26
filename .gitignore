@@ -4,7 +4,7 @@ node_modules/
 dist/
 coverage/
 *.log
-.tsbuildinfo
+*.tsbuildinfo
 __pycache__/
 *.pyc
 .DS_Store
