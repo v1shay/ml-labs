@@ -11,7 +11,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 import joblib
-import kagglehub
 import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -36,6 +35,11 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
+
+try:
+    import kagglehub
+except ModuleNotFoundError:
+    kagglehub = None
 
 RANDOM_STATE = 42
 MODEL_BUNDLE_FILE = "model.joblib"
@@ -578,6 +582,9 @@ def resolve_training_source(args: argparse.Namespace) -> tuple[Path, dict[str, s
     if kaggle_identifier is None:
         raise ValueError("Provide either a CSV file or a Kaggle dataset URL/slug.")
 
+    if kagglehub is None:
+        raise ModuleNotFoundError("No module named 'kagglehub'")
+
     dataset_dir = Path(kagglehub.dataset_download(kaggle_identifier))
     csv_path = select_kaggle_csv(dataset_dir, args.target, args.kaggle_file_path)
     relative_csv_path = str(csv_path.relative_to(dataset_dir))
@@ -606,6 +613,9 @@ def resolve_inspection_source(args: argparse.Namespace) -> tuple[Path | None, di
     kaggle_identifier, snippet_file_path = parse_kaggle_input(args.kaggle_input)
     if kaggle_identifier is None:
         raise ValueError("Provide either a CSV file or a Kaggle reference to inspect.")
+
+    if kagglehub is None:
+        raise ModuleNotFoundError("No module named 'kagglehub'")
 
     dataset_dir = Path(kagglehub.dataset_download(kaggle_identifier))
     selected_file_path = args.selected_file_path or snippet_file_path
