@@ -1,76 +1,131 @@
 # ML-Labs
 
-Backend-first MVP for an autonomous machine-learning lab demo.
+**An entire research lab at your fingertips.**
 
-## What is implemented
+---
 
-- `GET /api/lab/demo?scenario=classification|regression` returns stable real-backed demo snapshots
-- `POST /api/lab/run` accepts either CSV uploads or Kaggle dataset URL/slug inputs and runs a lightweight sklearn experiment sweep
-- `POST /api/lab/predict` scores either a saved real run or one of the bundled demo run IDs
-- Report and artifact generation live in shared backend utilities for the frontend to consume
+ML-Labs is an end-to-end machine learning platform where autonomous agents replicate the workflow of a full research team.
 
-## Local setup
+Instead of manually assembling pipelines, sourcing data, and iterating on models, ML-Labs coordinates a system of agents that:
 
-```bash
+* Discover and ingest datasets (CSV or Kaggle)
+* Profile and analyze data distributions
+* Construct and execute experiments
+* Train, test, and optimize models
+* Run statistical validation and accuracy analysis
+* Generate visualizations and diagnostics
+* Produce structured reports and research-style outputs
+* Serve predictions through a unified API
+
+From raw data to validated results and documentation—fully automated.
+
+---
+
+## Agent System
+
+ML-Labs is organized as a coordinated swarm of specialized agents, each responsible for a stage of the research lifecycle:
+
+* **Data Sourcing Agent**
+  Locates and ingests datasets (local or Kaggle)
+
+* **Data Analyst Agent**
+  Profiles distributions, detects anomalies, and prepares features
+
+* **Computation Agent**
+  Grounds research in real math and physics in a user-facing manner through KaTex
+
+* **Experiment Engineer Agent**
+  Designs experiment structure and selects modeling strategies
+
+* **Modeling Agent**
+  Trains and evaluates multiple sklearn models across tasks
+
+* **Optimization Agent**
+  Iterates on configurations to improve performance
+
+* **Statistical Analysis Agent**
+  Runs validation, accuracy metrics, and comparative evaluation
+
+* **Visualization Agent**
+  Generates plots, graphs, and interpretable outputs
+
+* **Report / Research Agent**
+  Produces structured summaries, experiment logs, and research-style drafts
+
+* **Prediction Agent**
+  Exposes trained models for inference via API
+
+These agents operate as a coordinated system, not isolated tools.
+
+---
+
+## API Surface
+
+* `GET /api/lab/demo`
+  Deterministic, real-backed experiment snapshots
+
+* `POST /api/lab/run`
+  Executes full multi-agent experiment pipeline
+
+* `POST /api/lab/predict`
+  Serves predictions from completed runs
+
+---
+
+## Tech Stack
+
+* **Backend:** Node.js (API orchestration layer)
+* **ML Execution:** Python (scikit-learn, pandas, NumPy)
+* **Experiment Engine:** Custom multi-agent orchestration system
+* **Data Sources:** CSV + Kaggle datasets
+* **Frontend:** Next.js (consumer layer for outputs and visualization)
+
+---
+
+## Run locally
+
+```bash id="ml1"
 npm install
+
 python3 -m venv .venv
 . .venv/bin/activate
+
 pip install -r requirements.txt
+
 npm run dev
 ```
 
-## Example requests
+---
 
-Fetch the deterministic demo payload:
+## Example
 
-```bash
-curl "http://localhost:3000/api/lab/demo?scenario=classification"
-curl "http://localhost:3000/api/lab/demo?scenario=regression"
-```
+Run a full experiment:
 
-Run a real CSV experiment:
-
-```bash
+```bash id="ml2"
 curl -X POST http://localhost:3000/api/lab/run \
-  -F "file=@public/data/demo-churn.csv" \
-  -F "targetColumn=churn" \
-  -F "intentPrompt=Create a model to predict churn"
+-F "file=@data.csv" \
+-F "targetColumn=target" \
+-F "intentPrompt=Predict target variable"
 ```
 
-Run a Kaggle-backed experiment:
+---
 
-```bash
-curl -X POST http://localhost:3000/api/lab/run \
-  -F "kaggleUrl=https://www.kaggle.com/datasets/waddahali/kaggle-competition-graph-dataset" \
-  -F "targetColumn=type" \
-  -F "intentPrompt=Create a model that predicts graph node type"
-```
+## Why it matters
 
-If multiple CSVs exist, ML-Labs will auto-select the one file that uniquely contains the target column.
+Machine learning today is constrained by coordination cost.
 
-If a Kaggle dataset contains multiple CSV files, you can pin one explicitly:
+A single experiment requires:
 
-```bash
-curl -X POST http://localhost:3000/api/lab/run \
-  -F "kaggleDataset=waddahali/kaggle-competition-graph-dataset" \
-  -F "kaggleFilePath=nodes.csv" \
-  -F "targetColumn=type"
-```
+* Data acquisition
+* Cleaning and profiling
+* Model design
+* Iteration and tuning
+* Evaluation and reporting
 
-Score a demo or real run:
+ML-Labs collapses this into a single execution layer.
 
-```bash
-curl -X POST http://localhost:3000/api/lab/predict \
-  -H "Content-Type: application/json" \
-  -d '{
-    "runId": "demo-classification-churn-001",
-    "input": {
-      "tenure_months": 8,
-      "monthly_charges": 109.5,
-      "support_tickets": 4,
-      "contract_type": "monthly",
-      "autopay": "no",
-      "internet_service": "fiber"
-    }
-  }'
-```
+Not by simplifying the work—but by automating the entire research loop.
+
+---
+
+ML-Labs turns machine learning from a manual process into an autonomous system.
