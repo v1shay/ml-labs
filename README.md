@@ -85,7 +85,7 @@ POST /api/lab/predict
 - **ML Execution:** Python (scikit-learn, pandas, NumPy)  
 - **Engine:** Custom multi-agent system  
 - **Data Sources:** CSV, Kaggle  
-- **Frontend:** Next.js  
+- **Frontend:** Next.js
 
 ---
 
