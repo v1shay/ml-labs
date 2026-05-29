@@ -12,11 +12,13 @@
 
 ## Results
 
+- Finalist at both the LUMA Hackathon (top 3% of 397 teams) and the Open Source for AI Hackathon 
 - **Agents:** 19 specialized agents  
 - **Research Phases:** 8 end-to-end stages  
 - **Pipeline Coverage:** Full lifecycle (data → deployment)  
 - **Execution Mode:** Autonomous, multi-agent orchestration  
-- **Output:** Validated models + structured research artifacts + APIs  
+- **Output:** Validated models + structured research artifacts + APIs
+
 
 ---
 
