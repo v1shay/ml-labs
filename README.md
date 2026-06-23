@@ -12,7 +12,7 @@
 
 ## Results
 
-- Finalist at both the LUMA Hackathon (top 3% of 397 teams) and the Open Source for AI Hackathon 
+- Winner of ML Empowerment Build Challenge and Best Web AI Application track, 1st/600+ participants 
 - **Agents:** 19 specialized agents  
 - **Research Phases:** 8 end-to-end stages  
 - **Pipeline Coverage:** Full lifecycle (data → deployment)  
